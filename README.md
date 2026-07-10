@@ -58,6 +58,8 @@ Cloudflare Dashboardの **Workers & Pages** から **Create application** → **
 
 D1の本番マイグレーションは、デプロイ前に `npm run db:migrate:remote` で適用してください。R2とQueuesはメディア・通知機能を実装する段階で接続します。
 
+Cloudflare Dashboardのみで初期化する場合は、D1のConsoleで [`scripts/production-bootstrap.sql`](./scripts/production-bootstrap.sql) を一度実行してください。このSQLは初期スキーマとWranglerのマイグレーション履歴を同時に作成します。
+
 ## コントリビューション
 
 現在は初期設計中です。参加ルールは [CONTRIBUTING.md](./CONTRIBUTING.md)、意思決定の原則は [GOVERNANCE.md](./GOVERNANCE.md) を参照してください。
