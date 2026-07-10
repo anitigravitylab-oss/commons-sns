@@ -21,11 +21,12 @@ Node.js 22以降を使用してください。
 
 ```bash
 npm install
-npm run db:migrate:local
 npm run dev
 ```
 
 ターミナルに表示されるローカルURL（通常は `http://localhost:5173`）をブラウザで開きます。
+
+現段階のUIプロトタイプはD1未接続のため、マイグレーションは不要です。`npm run db:migrate:local` は、`wrangler.jsonc` のコメント化された `d1_databases` Bindingsを有効にした後に実行できるようになります。
 
 ## 開発方針
 

@@ -18,3 +18,4 @@ pnpm-debug.log*
 
 # typescript
 *.tsbuildinfo
+/worker-configuration.d.ts
