@@ -1,5 +1,6 @@
 import { createRequestHandler, RouterContextProvider } from "react-router";
 import { cloudflareContext } from "../app/cloudflare";
+import type { AppEnv } from "../app/cloudflare";
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
@@ -21,12 +22,12 @@ export default {
       return Response.json({
         ok: true,
         runtime: "cloudflare-workers",
-        resources: ["D1", "R2", "Queues"],
+        database: "DB" in env ? "connected" : "not-configured",
       });
     }
 
     const routerContext = new RouterContextProvider();
-    routerContext.set(cloudflareContext, { env, ctx });
+    routerContext.set(cloudflareContext, { env: env as AppEnv, ctx });
 
     return requestHandler(request, routerContext);
   },

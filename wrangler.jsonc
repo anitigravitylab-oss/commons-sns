@@ -7,13 +7,13 @@
   "assets": {
     "directory": "./build/client"
   },
-  // 初回のUIデプロイ後、実リソースを作成して次のBindingsを追加します。
-  // "d1_databases": [{
-  //   "binding": "DB",
-  //   "database_name": "commons-db",
-  //   "database_id": "Cloudflareで発行されたD1 UUID",
-  //   "migrations_dir": "./migrations"
-  // }],
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "commons-db",
+    "database_id": "c2088c0d-b92e-4fe1-924c-b15b8153f9bb",
+    "migrations_dir": "./migrations"
+  }],
+  // D1接続後、画像と非同期処理を実装する段階で有効にします。
   // "r2_buckets": [{
   //   "binding": "MEDIA",
   //   "bucket_name": "commons-media"

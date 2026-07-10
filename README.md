@@ -2,18 +2,19 @@
 
 中央集権型の、コミュニティ開発OSS SNSです。X型のわかりやすい操作感を保ちながら、利用者が機能提案、設計議論、テスト、翻訳、実装に参加できるプロダクトを目指します。
 
-> 現在は公開開発前のUIプロトタイプです。名称・仕様・デザインは今後変更されます。
+> 現在は初期MVPです。名称・仕様・デザインは今後変更されます。
 
 ## 現在できること
 
 - レスポンシブな3カラム／モバイルタイムライン
-- 280文字までのローカル投稿
-- いいね、リポスト、ブックマーク
+- ユーザー登録、ログイン、ログアウト
+- 280文字までのD1永続投稿と本人による削除
+- D1に保存されるいいね、リポスト、ブックマーク
 - 投稿のリアルタイム検索
 - おすすめ／フォロー中タブの切り替え
 - コミュニティ開発への導線
 
-現段階の画面操作はブラウザを更新すると消えます。D1の初期スキーマとサンプルデータは実装済みで、次のマイルストーンで認証と画面操作をD1へ接続します。
+画像投稿、返信、フォロー、通知は今後のマイルストーンで実装します。
 
 ## ローカル起動
 
@@ -21,12 +22,11 @@ Node.js 22以降を使用してください。
 
 ```bash
 npm install
+npm run db:migrate:local
 npm run dev
 ```
 
 ターミナルに表示されるローカルURL（通常は `http://localhost:5173`）をブラウザで開きます。
-
-現段階のUIプロトタイプはD1未接続のため、マイグレーションは不要です。`npm run db:migrate:local` は、`wrangler.jsonc` のコメント化された `d1_databases` Bindingsを有効にした後に実行できるようになります。
 
 ## 開発方針
 
@@ -48,7 +48,7 @@ npm run dev
 
 ## Cloudflareへデプロイ
 
-初回はUIとWorkerだけをデプロイできます。Cloudflare Dashboardの **Workers & Pages** から **Create application** → **Import a repository** を選び、このリポジトリを接続してください。
+Cloudflare Dashboardの **Workers & Pages** から **Create application** → **Import a repository** を選び、このリポジトリを接続してください。
 
 - Worker name: `commons-sns`
 - Production branch: `main`
@@ -56,7 +56,7 @@ npm run dev
 - Deploy command: `npx wrangler deploy`
 - Root directory: `/`
 
-初回公開後にD1、R2、Queuesを作成し、`wrangler.jsonc`内のコメント化されたBindingsを有効にします。
+D1の本番マイグレーションは、デプロイ前に `npm run db:migrate:remote` で適用してください。R2とQueuesはメディア・通知機能を実装する段階で接続します。
 
 ## コントリビューション
 
