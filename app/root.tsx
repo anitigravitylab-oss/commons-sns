@@ -1,4 +1,12 @@
-import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import {
+  isRouteErrorResponse,
+  Link,
+  Links,
+  Meta,
+  Outlet,
+  Scripts,
+  ScrollRestoration,
+} from "react-router";
 import type { Route } from "./+types/root";
 import "./globals.css";
 
@@ -19,8 +27,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
           style={{
             position: "fixed",
             right: 16,
-            bottom: 16,
-            zIndex: 50,
+            bottom: 77,
+            zIndex: 25,
             border: "1px solid rgba(23, 32, 51, 0.14)",
             borderRadius: 999,
             padding: "9px 14px",
@@ -47,7 +55,8 @@ export default function App() {
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   const status = isRouteErrorResponse(error) ? error.status : 500;
-  const message = status === 404 ? "ページが見つかりません" : "問題が発生しました";
+  const message =
+    status === 404 ? "ページが見つかりません" : "問題が発生しました";
 
   return (
     <main className="route-error">
