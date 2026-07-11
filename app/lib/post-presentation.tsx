@@ -40,19 +40,27 @@ export function PostIdentity({ name, handle, createdAt }: { name: string; handle
 
 export function PostReactionCounts({ replies, reposts, likes }: { replies: number; reposts: number; likes: number }) {
   return (
-    <div
-      role="group"
-      aria-label="投稿の反応数"
-      style={{ display: "flex", alignItems: "center", gap: 24, color: "#69717d", fontSize: 12 }}
-    >
-      <span aria-label={`返信 ${replies}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <MessageCircle size={16} aria-hidden="true" /> {replies}
+    <div style={{ display: "flex", alignItems: "center", gap: 24, color: "#69717d", fontSize: 12 }}>
+      <span
+        role="img"
+        aria-label={`返信 ${replies}件`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+      >
+        <MessageCircle size={16} aria-hidden={true} /> <span aria-hidden={true}>{replies}</span>
       </span>
-      <span aria-label={`リポスト ${reposts}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <Repeat2 size={16} aria-hidden="true" /> {reposts}
+      <span
+        role="img"
+        aria-label={`リポスト ${reposts}件`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+      >
+        <Repeat2 size={16} aria-hidden={true} /> <span aria-hidden={true}>{reposts}</span>
       </span>
-      <span aria-label={`いいね ${likes}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <Heart size={16} aria-hidden="true" /> {likes}
+      <span
+        role="img"
+        aria-label={`いいね ${likes}件`}
+        style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+      >
+        <Heart size={16} aria-hidden={true} /> <span aria-hidden={true}>{likes}</span>
       </span>
     </div>
   );
