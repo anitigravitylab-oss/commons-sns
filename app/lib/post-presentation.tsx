@@ -1,7 +1,8 @@
 import { Heart, MessageCircle, Repeat2 } from "lucide-react";
 
 export function normalizeDate(value: string) {
-  return value.endsWith("Z") || value.includes("+") ? value : `${value.replace(" ", "T")}Z`;
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  return hasTimezone ? value : `${value.replace(" ", "T")}Z`;
 }
 
 export function timeAgo(value: string) {
@@ -40,17 +41,18 @@ export function PostIdentity({ name, handle, createdAt }: { name: string; handle
 export function PostReactionCounts({ replies, reposts, likes }: { replies: number; reposts: number; likes: number }) {
   return (
     <div
+      role="group"
       aria-label="投稿の反応数"
       style={{ display: "flex", alignItems: "center", gap: 24, color: "#69717d", fontSize: 12 }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <MessageCircle size={16} /> {replies}
+      <span aria-label={`返信 ${replies}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <MessageCircle size={16} aria-hidden="true" /> {replies}
       </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <Repeat2 size={16} /> {reposts}
+      <span aria-label={`リポスト ${reposts}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <Repeat2 size={16} aria-hidden="true" /> {reposts}
       </span>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-        <Heart size={16} /> {likes}
+      <span aria-label={`いいね ${likes}件`} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <Heart size={16} aria-hidden="true" /> {likes}
       </span>
     </div>
   );
