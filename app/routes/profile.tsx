@@ -3,6 +3,7 @@ import { data, Link, redirect, useFetcher } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
+import { avatarClass, normalizeDate, PostIdentity } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { getUserProfileByHandle, updateUserProfile } from "../lib/users.server";
 
@@ -11,6 +12,8 @@ type ActionResult = { ok?: boolean; error?: string };
 export function meta() {
   return [{ title: "プロフィール — Commons" }];
 }
+
+const PROFILE_PAGE_SIZE = 20;
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
@@ -21,10 +24,19 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   if (!profile) throw data(null, { status: 404 });
 
   const user = await getSessionUser(request, env);
+  const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
+  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const fetchedPosts = await getUserPosts(env, profile.id, user?.id ?? null, {
+    limit: PROFILE_PAGE_SIZE + 1,
+    offset: (page - 1) * PROFILE_PAGE_SIZE,
+  });
+
   return {
     user,
     profile,
-    posts: await getUserPosts(env, profile.id, user?.id ?? null),
+    posts: fetchedPosts.slice(0, PROFILE_PAGE_SIZE),
+    page,
+    hasNextPage: fetchedPosts.length > PROFILE_PAGE_SIZE,
   };
 }
 
@@ -66,25 +78,8 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   return data<ActionResult>({ ok: true });
 }
 
-function normalizeDate(value: string) {
-  return value.endsWith("Z") || value.includes("+") ? value : `${value.replace(" ", "T")}Z`;
-}
-
-function timeAgo(value: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(normalizeDate(value)).getTime()) / 1000));
-  if (seconds < 60) return "今";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}時間`;
-  return `${Math.floor(seconds / 86_400)}日`;
-}
-
 function joinedAt(value: string) {
   return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long" }).format(new Date(normalizeDate(value)));
-}
-
-function avatarClass(handle: string) {
-  const classes = ["avatar-blue", "avatar-violet", "avatar-orange", "avatar-green"];
-  return classes[handle.charCodeAt(0) % classes.length];
 }
 
 function ProfilePost({ post }: { post: TimelinePost }) {
@@ -100,17 +95,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
     >
       <div className={`avatar ${avatarClass(post.handle)}`}>{post.name.slice(0, 1)}</div>
       <div style={{ minWidth: 0 }}>
-        <div className="post-identity">
-          <strong>{post.name}</strong>
-          {post.handle === "commons_dev" && (
-            <span className="verified" aria-label="公式">
-              ✓
-            </span>
-          )}
-          <span>@{post.handle}</span>
-          <span>·</span>
-          <span>{timeAgo(post.createdAt)}</span>
-        </div>
+        <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
         <p style={{ margin: "8px 0 13px", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
           {post.body}
         </p>
@@ -131,7 +116,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
 }
 
 export default function ProfilePage({ loaderData }: Route.ComponentProps) {
-  const { user, profile, posts } = loaderData;
+  const { user, profile, posts, page, hasNextPage } = loaderData;
   const fetcher = useFetcher<ActionResult>();
   const isOwner = user?.id === profile.id;
   const isSaving = fetcher.state !== "idle";
@@ -253,11 +238,37 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
 
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #e7e9ed", fontWeight: 800 }}>投稿</div>
         {posts.length > 0 ? (
-          posts.map((post) => <ProfilePost key={post.id} post={post} />)
+          <>
+            {posts.map((post) => (
+              <ProfilePost key={post.id} post={post} />
+            ))}
+            <nav
+              aria-label="プロフィール投稿のページ移動"
+              style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "18px" }}
+            >
+              {page > 1 ? (
+                <Link to={`?page=${page - 1}`} style={{ color: "#2867e8", fontWeight: 700 }}>
+                  ← 新しい投稿
+                </Link>
+              ) : (
+                <span />
+              )}
+              {hasNextPage && (
+                <Link to={`?page=${page + 1}`} style={{ color: "#2867e8", fontWeight: 700 }}>
+                  過去の投稿 →
+                </Link>
+              )}
+            </nav>
+          </>
         ) : (
           <div className="empty-state" style={{ minHeight: 260 }}>
             <UserRound size={30} />
-            <strong>公開投稿はまだありません</strong>
+            <strong>{page > 1 ? "このページには投稿がありません" : "公開投稿はまだありません"}</strong>
+            {page > 1 && (
+              <Link to="?page=1" style={{ color: "#2867e8", fontWeight: 700 }}>
+                最初のページへ戻る
+              </Link>
+            )}
           </div>
         )}
       </section>
