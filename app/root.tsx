@@ -1,4 +1,4 @@
-import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import type { Route } from "./+types/root";
 import "./globals.css";
 
@@ -13,8 +13,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
-        <a
-          href="/settings"
+        <Link
+          to="/settings"
           aria-label="アカウント設定"
           style={{
             position: "fixed",
@@ -33,7 +33,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           }}
         >
           設定
-        </a>
+        </Link>
         <ScrollRestoration />
         <Scripts />
       </body>
