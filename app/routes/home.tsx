@@ -176,6 +176,14 @@ const navItems = [
   { label: "設定", icon: Settings },
 ];
 
+const mobileNavItems = [
+  { id: "home", icon: Home },
+  { id: "search", icon: Search },
+  { id: "compose", icon: Feather },
+  { id: "notifications", icon: Bell },
+  { id: "profile", icon: UserRound },
+];
+
 function timeAgo(value: string) {
   const normalized = value.endsWith("Z") || value.includes("+") ? value : `${value.replace(" ", "T")}Z`;
   const seconds = Math.max(0, Math.floor((Date.now() - new Date(normalized).getTime()) / 1000));
@@ -213,7 +221,7 @@ function AuthModal({
       role="presentation"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <section className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <dialog open className="auth-modal" aria-labelledby="auth-title">
         <button className="modal-close" onClick={onClose} aria-label="閉じる">
           ×
         </button>
@@ -261,7 +269,7 @@ function AuthModal({
         <button className="auth-switch" onClick={() => onChange(mode === "login" ? "signup" : "login")}>
           {mode === "login" ? "はじめての方はこちら" : "すでにアカウントをお持ちの方"}
         </button>
-      </section>
+      </dialog>
     </div>
   );
 }
@@ -609,11 +617,11 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         </div>
       </aside>
       <nav className="mobile-nav" aria-label="モバイルナビゲーション">
-        {[Home, Search, Feather, Bell, UserRound].map((Icon, index) => (
+        {mobileNavItems.map(({ id, icon: Icon }) => (
           <button
-            key={index}
-            className={index === 0 ? "active" : ""}
-            onClick={index === 2 && !user ? requireLogin : undefined}
+            key={id}
+            className={id === "home" ? "active" : ""}
+            onClick={id === "compose" && !user ? requireLogin : undefined}
           >
             <Icon size={23} />
           </button>
