@@ -31,9 +31,7 @@ export async function action({ request, context }: Route.ActionArgs) {
   }
 
   try {
-    await env.DB.prepare(
-      "DELETE FROM post_reactions WHERE user_id = ? AND post_id = ? AND kind = 'bookmark'",
-    )
+    await env.DB.prepare("DELETE FROM post_reactions WHERE user_id = ? AND post_id = ? AND kind = 'bookmark'")
       .bind(user.id, postId)
       .run();
   } catch (error) {
