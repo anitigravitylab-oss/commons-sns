@@ -50,15 +50,7 @@ export function PostIdentity({ name, handle, createdAt }: { name: string; handle
   );
 }
 
-function ReactionCount({
-  label,
-  count,
-  icon,
-}: {
-  label: string;
-  count: number;
-  icon: React.ReactNode;
-}) {
+function ReactionCount({ label, count, icon }: { label: string; count: number; icon: React.ReactNode }) {
   return (
     <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
       <span style={SCREEN_READER_ONLY_STYLE}>{label}</span>
