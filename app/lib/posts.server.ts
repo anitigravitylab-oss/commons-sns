@@ -29,20 +29,7 @@ type PostRow = {
 
 type ReactionRow = { post_id: string; kind: "like" | "repost" | "bookmark" };
 
-export async function getTimeline(env: AppEnv, viewerId: string | null): Promise<TimelinePost[]> {
-  const result = await env.DB.prepare(
-    `SELECT p.id, p.author_id, u.display_name, u.handle, p.body, p.created_at,
-       (SELECT COUNT(*) FROM posts replies WHERE replies.reply_to_id = p.id AND replies.deleted_at IS NULL) AS replies,
-       (SELECT COUNT(*) FROM post_reactions rr WHERE rr.post_id = p.id AND rr.kind = 'repost') AS reposts,
-       (SELECT COUNT(*) FROM post_reactions lr WHERE lr.post_id = p.id AND lr.kind = 'like') AS likes
-     FROM posts p
-     JOIN users u ON u.id = p.author_id
-     WHERE p.deleted_at IS NULL AND p.visibility = 'public'
-     ORDER BY p.created_at DESC
-     LIMIT 50`,
-  ).all<PostRow>();
-
-  const rows = result.results ?? [];
+async function hydratePosts(env: AppEnv, rows: PostRow[], viewerId: string | null): Promise<TimelinePost[]> {
   const reactions = new Map<string, Set<ReactionRow["kind"]>>();
   if (viewerId && rows.length > 0) {
     const placeholders = rows.map(() => "?").join(",");
@@ -72,4 +59,42 @@ export async function getTimeline(env: AppEnv, viewerId: string | null): Promise
     reposted: reactions.get(row.id)?.has("repost") ?? false,
     bookmarked: reactions.get(row.id)?.has("bookmark") ?? false,
   }));
+}
+
+export async function getTimeline(env: AppEnv, viewerId: string | null): Promise<TimelinePost[]> {
+  const result = await env.DB.prepare(
+    `SELECT p.id, p.author_id, u.display_name, u.handle, p.body, p.created_at,
+       (SELECT COUNT(*) FROM posts replies WHERE replies.reply_to_id = p.id AND replies.deleted_at IS NULL) AS replies,
+       (SELECT COUNT(*) FROM post_reactions rr WHERE rr.post_id = p.id AND rr.kind = 'repost') AS reposts,
+       (SELECT COUNT(*) FROM post_reactions lr WHERE lr.post_id = p.id AND lr.kind = 'like') AS likes
+     FROM posts p
+     JOIN users u ON u.id = p.author_id
+     WHERE p.deleted_at IS NULL AND p.visibility = 'public'
+     ORDER BY p.created_at DESC
+     LIMIT 50`,
+  ).all<PostRow>();
+
+  return hydratePosts(env, result.results ?? [], viewerId);
+}
+
+export async function getBookmarkedPosts(env: AppEnv, userId: string): Promise<TimelinePost[]> {
+  const result = await env.DB.prepare(
+    `SELECT p.id, p.author_id, u.display_name, u.handle, p.body, p.created_at,
+       (SELECT COUNT(*) FROM posts replies WHERE replies.reply_to_id = p.id AND replies.deleted_at IS NULL) AS replies,
+       (SELECT COUNT(*) FROM post_reactions rr WHERE rr.post_id = p.id AND rr.kind = 'repost') AS reposts,
+       (SELECT COUNT(*) FROM post_reactions lr WHERE lr.post_id = p.id AND lr.kind = 'like') AS likes
+     FROM post_reactions bookmark
+     JOIN posts p ON p.id = bookmark.post_id
+     JOIN users u ON u.id = p.author_id
+     WHERE bookmark.user_id = ?
+       AND bookmark.kind = 'bookmark'
+       AND p.deleted_at IS NULL
+       AND p.visibility = 'public'
+     ORDER BY bookmark.created_at DESC
+     LIMIT 100`,
+  )
+    .bind(userId)
+    .all<PostRow>();
+
+  return hydratePosts(env, result.results ?? [], userId);
 }
