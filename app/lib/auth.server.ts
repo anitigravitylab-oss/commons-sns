@@ -75,6 +75,10 @@ function sessionCookie(token: string, maxAge: number) {
   ].join("; ");
 }
 
+export function clearSessionCookie() {
+  return sessionCookie("", 0);
+}
+
 export async function hashPassword(password: string) {
   const salt = randomToken(16);
   return { salt, hash: await derivePassword(password, salt) };
@@ -129,5 +133,5 @@ export async function destroySession(request: Request, env: AppEnv) {
     await env.DB.prepare("DELETE FROM sessions WHERE id_hash = ?")
       .bind(await sha256(token))
       .run();
-  return sessionCookie("", 0);
+  return clearSessionCookie();
 }
