@@ -850,6 +850,8 @@ a {
 .auth-modal {
   width: min(410px, 100%);
   position: relative;
+  margin: 0;
+  border: 0;
   background: white;
   border-radius: 20px;
   padding: 29px;
