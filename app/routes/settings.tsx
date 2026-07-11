@@ -1,7 +1,12 @@
 import { data, Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/settings";
 import { cloudflareContext } from "../cloudflare";
-import { clearSessionCookie, findUserForLogin, getSessionUser, verifyPassword } from "../lib/auth.server";
+import {
+  clearSessionCookie,
+  findUserForLogin,
+  getSessionUser,
+  verifyPassword,
+} from "../lib/auth.server";
 
 type ActionResult = { error?: string };
 
@@ -23,7 +28,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 
   const formData = await request.formData();
   const intent = String(formData.get("intent") ?? "");
-  if (intent !== "deleteAccount") return data<ActionResult>({ error: "不明な操作です。" }, { status: 400 });
+  if (intent !== "deleteAccount")
+    return data<ActionResult>({ error: "不明な操作です。" }, { status: 400 });
 
   const password = String(formData.get("password") ?? "");
   const confirmation = String(formData.get("confirmation") ?? "")
@@ -32,16 +38,26 @@ export async function action({ request, context }: Route.ActionArgs) {
     .replace(/^@/, "");
 
   if (confirmation !== user.handle.toLowerCase()) {
-    return data<ActionResult>({ error: "確認用のユーザーIDが一致しません。" }, { status: 400 });
+    return data<ActionResult>(
+      { error: "確認用のユーザーIDが一致しません。" },
+      { status: 400 },
+    );
   }
 
   const account = await findUserForLogin(env, user.handle);
   if (
     !account?.password_hash ||
     !account.password_salt ||
-    !(await verifyPassword(password, account.password_hash, account.password_salt))
+    !(await verifyPassword(
+      password,
+      account.password_hash,
+      account.password_salt,
+    ))
   ) {
-    return data<ActionResult>({ error: "パスワードが違います。" }, { status: 401 });
+    return data<ActionResult>(
+      { error: "パスワードが違います。" },
+      { status: 401 },
+    );
   }
 
   try {
@@ -49,7 +65,10 @@ export async function action({ request, context }: Route.ActionArgs) {
   } catch (error) {
     console.error("Failed to delete account", error);
     return data<ActionResult>(
-      { error: "アカウントを削除できませんでした。時間をおいてもう一度お試しください。" },
+      {
+        error:
+          "アカウントを削除できませんでした。時間をおいてもう一度お試しください。",
+      },
       { status: 500 },
     );
   }
@@ -62,7 +81,8 @@ export async function action({ request, context }: Route.ActionArgs) {
 function DeleteAccountButton() {
   const navigation = useNavigation();
   const isSubmitting =
-    navigation.state === "submitting" && navigation.formData?.get("intent") === "deleteAccount";
+    navigation.state === "submitting" &&
+    navigation.formData?.get("intent") === "deleteAccount";
 
   return (
     <button
@@ -86,7 +106,10 @@ function DeleteAccountButton() {
   );
 }
 
-export default function SettingsPage({ loaderData, actionData }: Route.ComponentProps) {
+export default function SettingsPage({
+  loaderData,
+  actionData,
+}: Route.ComponentProps) {
   const { user } = loaderData;
 
   return (
@@ -129,7 +152,12 @@ export default function SettingsPage({ loaderData, actionData }: Route.Component
               type="password"
               required
               autoComplete="current-password"
-              style={{ padding: "12px 14px", border: "1px solid #cbd2df", borderRadius: 10, font: "inherit" }}
+              style={{
+                padding: "12px 14px",
+                border: "1px solid #cbd2df",
+                borderRadius: 10,
+                font: "inherit",
+              }}
             />
           </label>
           <label style={{ display: "grid", gap: 8, fontWeight: 650 }}>
@@ -139,7 +167,12 @@ export default function SettingsPage({ loaderData, actionData }: Route.Component
               required
               autoCapitalize="none"
               autoComplete="off"
-              style={{ padding: "12px 14px", border: "1px solid #cbd2df", borderRadius: 10, font: "inherit" }}
+              style={{
+                padding: "12px 14px",
+                border: "1px solid #cbd2df",
+                borderRadius: 10,
+                font: "inherit",
+              }}
             />
           </label>
 
