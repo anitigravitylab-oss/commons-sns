@@ -113,9 +113,7 @@ export async function getUserPosts(
 ): Promise<TimelinePost[]> {
   const limit = Math.min(Math.max(Math.trunc(options.limit ?? 20), 1), 100);
   const requestedOffset = Math.trunc(options.offset ?? 0);
-  const offset = Number.isNaN(requestedOffset)
-    ? 0
-    : Math.min(Math.max(requestedOffset, 0), Number.MAX_SAFE_INTEGER);
+  const offset = Number.isNaN(requestedOffset) ? 0 : Math.min(Math.max(requestedOffset, 0), Number.MAX_SAFE_INTEGER);
   const result = await env.DB.prepare(
     `SELECT ${POST_SELECT_SQL}
      FROM posts p
