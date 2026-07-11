@@ -13,6 +13,27 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
+        <a
+          href="/settings"
+          aria-label="アカウント設定"
+          style={{
+            position: "fixed",
+            right: 16,
+            bottom: 16,
+            zIndex: 50,
+            border: "1px solid rgba(23, 32, 51, 0.14)",
+            borderRadius: 999,
+            padding: "9px 14px",
+            background: "rgba(255, 255, 255, 0.94)",
+            color: "#34405a",
+            fontSize: 14,
+            fontWeight: 700,
+            textDecoration: "none",
+            boxShadow: "0 8px 24px rgba(23, 32, 51, 0.12)",
+          }}
+        >
+          設定
+        </a>
         <ScrollRestoration />
         <Scripts />
       </body>
