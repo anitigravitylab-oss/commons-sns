@@ -109,7 +109,10 @@ export async function getUserPosts(
   env: AppEnv,
   profileUserId: string,
   viewerId: string | null,
+  options: { limit?: number; offset?: number } = {},
 ): Promise<TimelinePost[]> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 20), 1), 100);
+  const offset = Math.max(Math.trunc(options.offset ?? 0), 0);
   const result = await env.DB.prepare(
     `SELECT ${POST_SELECT_SQL}
      FROM posts p
@@ -118,9 +121,9 @@ export async function getUserPosts(
        AND p.deleted_at IS NULL
        AND p.visibility = 'public'
      ORDER BY p.created_at DESC
-     LIMIT 100`,
+     LIMIT ? OFFSET ?`,
   )
-    .bind(profileUserId)
+    .bind(profileUserId, limit, offset)
     .all<PostRow>();
 
   return hydratePosts(env, result.results ?? [], viewerId);
