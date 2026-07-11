@@ -115,11 +115,12 @@ export async function createSession(env: AppEnv, userId: string) {
   const token = randomToken();
   const idHash = await sha256(token);
   const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000).toISOString();
-  await env.DB.batch([
-    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')"),
-    env.DB.prepare("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES (?, ?, ?)")
-      .bind(idHash, userId, expires),
-  ]);
+  // Keep this write as a single statement.  The former D1 batch combined a
+  // best-effort expired-session cleanup with the required login write; if the
+  // cleanup failed, registration completed but the response became a 500.
+  await env.DB.prepare("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES (?, ?, ?)")
+    .bind(idHash, userId, expires)
+    .run();
   return sessionCookie(token, SESSION_DAYS * 86_400);
 }
 
