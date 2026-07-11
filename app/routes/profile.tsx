@@ -14,7 +14,9 @@ export function meta() {
 
 export async function loader({ request, context, params }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
-  const handle = String(params.handle ?? "").trim().replace(/^@/, "");
+  const handle = String(params.handle ?? "")
+    .trim()
+    .replace(/^@/, "");
   const profile = await getUserProfileByHandle(env, handle);
   if (!profile) throw data(null, { status: 404 });
 
@@ -31,7 +33,9 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/");
 
-  const handle = String(params.handle ?? "").trim().replace(/^@/, "");
+  const handle = String(params.handle ?? "")
+    .trim()
+    .replace(/^@/, "");
   const profile = await getUserProfileByHandle(env, handle);
   if (!profile) throw data(null, { status: 404 });
   if (profile.id !== user.id) {
@@ -209,7 +213,13 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
           {isOwner && (
             <fetcher.Form
               method="post"
-              style={{ marginTop: 22, padding: 16, border: "1px solid #e3e6eb", borderRadius: 14, background: "#fafbfc" }}
+              style={{
+                marginTop: 22,
+                padding: 16,
+                border: "1px solid #e3e6eb",
+                borderRadius: 14,
+                background: "#fafbfc",
+              }}
             >
               <input type="hidden" name="intent" value="updateProfile" />
               <h3 style={{ margin: "0 0 14px", fontSize: 16 }}>プロフィールを編集</h3>
@@ -222,7 +232,12 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
                 <textarea name="bio" defaultValue={profile.bio} maxLength={160} rows={4} />
               </label>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
-                <button type="submit" disabled={isSaving} className="auth-submit" style={{ width: "auto", paddingInline: 18 }}>
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="auth-submit"
+                  style={{ width: "auto", paddingInline: 18 }}
+                >
                   {isSaving ? "保存中…" : "保存する"}
                 </button>
                 {fetcher.data?.ok && <span style={{ color: "#238636", fontSize: 13 }}>更新しました。</span>}
