@@ -57,11 +57,7 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
   };
 }
 
-export async function updateUserProfile(
-  env: AppEnv,
-  userId: string,
-  values: { displayName: string; bio: string },
-) {
+export async function updateUserProfile(env: AppEnv, userId: string, values: { displayName: string; bio: string }) {
   await env.DB.prepare("UPDATE users SET display_name = ?, bio = ? WHERE id = ?")
     .bind(values.displayName, values.bio, userId)
     .run();
