@@ -36,6 +36,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             gap: 8,
           }}
         >
+          <Link to="/profile" style={quickLinkStyle}>
+            プロフィール
+          </Link>
           <Link to="/bookmarks" style={quickLinkStyle}>
             ブックマーク
           </Link>
