@@ -58,7 +58,14 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
 }
 
 export async function updateUserProfile(env: AppEnv, userId: string, values: { displayName: string; bio: string }) {
-  await env.DB.prepare("UPDATE users SET display_name = ?, bio = ? WHERE id = ?")
-    .bind(values.displayName, values.bio, userId)
-    .run();
+  const displayName = values.displayName.trim();
+  const bio = values.bio.trim();
+  if (displayName.length < 1 || displayName.length > 30) {
+    throw new Error("displayName must be between 1 and 30 characters");
+  }
+  if (bio.length > 160) {
+    throw new Error("bio must be 160 characters or fewer");
+  }
+
+  await env.DB.prepare("UPDATE users SET display_name = ?, bio = ? WHERE id = ?").bind(displayName, bio, userId).run();
 }
