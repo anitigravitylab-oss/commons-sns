@@ -1,9 +1,7 @@
-import { data, Form, Link, redirect } from "react-router";
+import { data, Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/settings";
 import { cloudflareContext } from "../cloudflare";
-import { findUserForLogin, getSessionUser, verifyPassword } from "../lib/auth.server";
-
-const CLEAR_SESSION_COOKIE = "commons_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
+import { clearSessionCookie, findUserForLogin, getSessionUser, verifyPassword } from "../lib/auth.server";
 
 type ActionResult = { error?: string };
 
@@ -46,11 +44,46 @@ export async function action({ request, context }: Route.ActionArgs) {
     return data<ActionResult>({ error: "パスワードが違います。" }, { status: 401 });
   }
 
-  await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+  try {
+    await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+  } catch (error) {
+    console.error("Failed to delete account", error);
+    return data<ActionResult>(
+      { error: "アカウントを削除できませんでした。時間をおいてもう一度お試しください。" },
+      { status: 500 },
+    );
+  }
 
   return redirect("/", {
-    headers: { "Set-Cookie": CLEAR_SESSION_COOKIE },
+    headers: { "Set-Cookie": clearSessionCookie() },
   });
+}
+
+function DeleteAccountButton() {
+  const navigation = useNavigation();
+  const isSubmitting =
+    navigation.state === "submitting" && navigation.formData?.get("intent") === "deleteAccount";
+
+  return (
+    <button
+      type="submit"
+      disabled={isSubmitting}
+      style={{
+        justifySelf: "start",
+        border: 0,
+        borderRadius: 999,
+        padding: "12px 20px",
+        background: "#c62828",
+        color: "white",
+        font: "inherit",
+        fontWeight: 750,
+        cursor: isSubmitting ? "wait" : "pointer",
+        opacity: isSubmitting ? 0.7 : 1,
+      }}
+    >
+      {isSubmitting ? "削除しています…" : "アカウントを完全に削除する"}
+    </button>
+  );
 }
 
 export default function SettingsPage({ loaderData, actionData }: Route.ComponentProps) {
@@ -116,22 +149,7 @@ export default function SettingsPage({ loaderData, actionData }: Route.Component
             </div>
           )}
 
-          <button
-            type="submit"
-            style={{
-              justifySelf: "start",
-              border: 0,
-              borderRadius: 999,
-              padding: "12px 20px",
-              background: "#c62828",
-              color: "white",
-              font: "inherit",
-              fontWeight: 750,
-              cursor: "pointer",
-            }}
-          >
-            アカウントを完全に削除する
-          </button>
+          <DeleteAccountButton />
         </Form>
       </section>
     </main>
