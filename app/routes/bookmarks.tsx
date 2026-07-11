@@ -1,9 +1,9 @@
-import { Bookmark, Heart, MessageCircle, Repeat2 } from "lucide-react";
+import { Bookmark } from "lucide-react";
 import { data, Link, redirect, useFetcher } from "react-router";
 import type { Route } from "./+types/bookmarks";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
-import { avatarClass, PostIdentity } from "../lib/post-presentation";
+import { avatarClass, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getBookmarkedPosts, type TimelinePost } from "../lib/posts.server";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -90,20 +90,7 @@ function BookmarkCard({ post }: { post: TimelinePost }) {
         <p style={{ margin: "8px 0 13px", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
           {post.body}
         </p>
-        <div
-          aria-label="投稿の反応数"
-          style={{ display: "flex", alignItems: "center", gap: 24, color: "#69717d", fontSize: 12 }}
-        >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <MessageCircle size={16} /> {post.replies}
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Repeat2 size={16} /> {post.reposts}
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Heart size={16} /> {post.likes}
-          </span>
-        </div>
+        <PostReactionCounts replies={post.replies} reposts={post.reposts} likes={post.likes} />
         {fetcher.data?.error && (
           <div role="alert" className="inline-error" style={{ marginTop: 10 }}>
             {fetcher.data.error}
