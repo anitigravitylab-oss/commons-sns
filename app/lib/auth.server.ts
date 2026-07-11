@@ -2,7 +2,8 @@ import type { AppEnv } from "../cloudflare";
 
 const SESSION_COOKIE = "commons_session";
 const SESSION_DAYS = 30;
-const PBKDF2_ITERATIONS = 120_000;
+// Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
+const PBKDF2_ITERATIONS = 100_000;
 
 export type SessionUser = {
   id: string;
