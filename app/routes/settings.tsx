@@ -1,4 +1,4 @@
-import { data, Form, redirect } from "react-router";
+import { data, Form, Link, redirect } from "react-router";
 import type { Route } from "./+types/settings";
 import { cloudflareContext } from "../cloudflare";
 import { findUserForLogin, getSessionUser, verifyPassword } from "../lib/auth.server";
@@ -66,9 +66,9 @@ export default function SettingsPage({ loaderData, actionData }: Route.Component
         color: "#172033",
       }}
     >
-      <a href="/" style={{ color: "#2962d9", textDecoration: "none" }}>
+      <Link to="/" style={{ color: "#2962d9", textDecoration: "none" }}>
         ← タイムラインへ戻る
-      </a>
+      </Link>
       <h1 style={{ marginTop: 28 }}>アカウント設定</h1>
       <p style={{ color: "#657086" }}>@{user.handle}</p>
 
