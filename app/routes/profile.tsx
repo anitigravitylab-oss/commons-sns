@@ -1,10 +1,11 @@
-import { CalendarDays, Heart, MessageCircle, Repeat2, UserRound } from "lucide-react";
+import { CalendarDays, UserRound } from "lucide-react";
 import { data, Link, redirect, useFetcher } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
-import { avatarClass, normalizeDate, PostIdentity } from "../lib/post-presentation";
+import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
+import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
 import { getUserProfileByHandle, updateUserProfile } from "../lib/users.server";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -61,10 +62,10 @@ export async function action({ request, context, params }: Route.ActionArgs) {
 
   const displayName = String(formData.get("displayName") ?? "").trim();
   const bio = String(formData.get("bio") ?? "").trim();
-  if (displayName.length < 1 || displayName.length > 30) {
+  if (displayName.length < DISPLAY_NAME_MIN_LENGTH || displayName.length > DISPLAY_NAME_MAX_LENGTH) {
     return data<ActionResult>({ error: "表示名は1〜30文字で入力してください。" }, { status: 400 });
   }
-  if (bio.length > 160) {
+  if (bio.length > BIO_MAX_LENGTH) {
     return data<ActionResult>({ error: "自己紹介は160文字以内で入力してください。" }, { status: 400 });
   }
 
@@ -99,17 +100,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
         <p style={{ margin: "8px 0 13px", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
           {post.body}
         </p>
-        <div style={{ display: "flex", gap: 24, color: "#69717d", fontSize: 12 }} aria-label="投稿の反応数">
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <MessageCircle size={16} /> {post.replies}
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Repeat2 size={16} /> {post.reposts}
-          </span>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <Heart size={16} /> {post.likes}
-          </span>
-        </div>
+        <PostReactionCounts replies={post.replies} reposts={post.reposts} likes={post.likes} />
       </div>
     </article>
   );
@@ -210,11 +201,17 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
               <h3 style={{ margin: "0 0 14px", fontSize: 16 }}>プロフィールを編集</h3>
               <label style={{ display: "grid", gap: 6, marginBottom: 12, fontSize: 13, fontWeight: 700 }}>
                 表示名
-                <input name="displayName" defaultValue={profile.displayName} required maxLength={30} />
+                <input
+                  name="displayName"
+                  defaultValue={profile.displayName}
+                  required
+                  minLength={DISPLAY_NAME_MIN_LENGTH}
+                  maxLength={DISPLAY_NAME_MAX_LENGTH}
+                />
               </label>
               <label style={{ display: "grid", gap: 6, fontSize: 13, fontWeight: 700 }}>
                 自己紹介
-                <textarea name="bio" defaultValue={profile.bio} maxLength={160} rows={4} />
+                <textarea name="bio" defaultValue={profile.bio} maxLength={BIO_MAX_LENGTH} rows={4} />
               </label>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                 <button
