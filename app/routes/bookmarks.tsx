@@ -3,6 +3,7 @@ import { data, Link, redirect, useFetcher } from "react-router";
 import type { Route } from "./+types/bookmarks";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
+import { avatarClass, PostIdentity } from "../lib/post-presentation";
 import { getBookmarkedPosts, type TimelinePost } from "../lib/posts.server";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -42,20 +43,6 @@ export async function action({ request, context }: Route.ActionArgs) {
   return data<ActionResult>({ ok: true });
 }
 
-function timeAgo(value: string) {
-  const normalized = value.endsWith("Z") || value.includes("+") ? value : `${value.replace(" ", "T")}Z`;
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(normalized).getTime()) / 1000));
-  if (seconds < 60) return "今";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}時間`;
-  return `${Math.floor(seconds / 86_400)}日`;
-}
-
-function avatarClass(handle: string) {
-  const classes = ["avatar-blue", "avatar-violet", "avatar-orange", "avatar-green"];
-  return classes[handle.charCodeAt(0) % classes.length];
-}
-
 function BookmarkCard({ post }: { post: TimelinePost }) {
   const fetcher = useFetcher<ActionResult>();
   const isRemoving = fetcher.state !== "idle";
@@ -74,17 +61,7 @@ function BookmarkCard({ post }: { post: TimelinePost }) {
       <div className={`avatar ${avatarClass(post.handle)}`}>{post.name.slice(0, 1)}</div>
       <div style={{ minWidth: 0 }}>
         <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-          <div className="post-identity" style={{ minWidth: 0 }}>
-            <strong>{post.name}</strong>
-            {post.handle === "commons_dev" && (
-              <span className="verified" aria-label="公式">
-                ✓
-              </span>
-            )}
-            <span>@{post.handle}</span>
-            <span>·</span>
-            <span>{timeAgo(post.createdAt)}</span>
-          </div>
+          <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="removeBookmark" />
             <input type="hidden" name="postId" value={post.id} />
