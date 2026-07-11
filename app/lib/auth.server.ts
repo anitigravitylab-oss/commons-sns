@@ -75,6 +75,10 @@ function sessionCookie(token: string, maxAge: number) {
   ].join("; ");
 }
 
+export function clearSessionCookie() {
+  return sessionCookie("", 0);
+}
+
 export async function hashPassword(password: string) {
   const salt = randomToken(16);
   return { salt, hash: await derivePassword(password, salt) };
@@ -107,7 +111,12 @@ export async function getSessionUser(request: Request, env: AppEnv): Promise<Ses
     .bind(idHash)
     .first<Omit<AuthRow, "password_hash" | "password_salt">>();
   if (!row) return null;
-  return { id: row.id, handle: row.handle, displayName: row.display_name, role: row.role };
+  return {
+    id: row.id,
+    handle: row.handle,
+    displayName: row.display_name,
+    role: row.role,
+  };
 }
 
 export async function createSession(env: AppEnv, userId: string) {
@@ -129,5 +138,5 @@ export async function destroySession(request: Request, env: AppEnv) {
     await env.DB.prepare("DELETE FROM sessions WHERE id_hash = ?")
       .bind(await sha256(token))
       .run();
-  return sessionCookie("", 0);
+  return clearSessionCookie();
 }
