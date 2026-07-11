@@ -193,7 +193,7 @@ function AuthModal({
         <span className="brand-mark auth-brand"><span /></span>
         <h2 id="auth-title">{mode === "login" ? "Commonsにログイン" : "Commonsをはじめる"}</h2>
         <p>{mode === "login" ? "おかえりなさい。" : "メールアドレスなしですぐに登録できます。"}</p>
-        <Form method="post" className="auth-form">
+        <Form method="post" action="?index" className="auth-form">
           <input type="hidden" name="intent" value={mode} />
           {mode === "signup" && <label>表示名<input name="displayName" required maxLength={30} autoComplete="name" placeholder="例：あおい" /></label>}
           <label>ユーザーID<input name="handle" required minLength={3} maxLength={20} autoCapitalize="none" autoComplete="username" placeholder="例：aoi_note" /></label>
@@ -225,7 +225,7 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
   }
 
   return (
-    <fetcher.Form method="post" className="composer">
+    <fetcher.Form method="post" action="?index" className="composer">
       <input type="hidden" name="intent" value="createPost" />
       <UserAvatar user={user} />
       <div className="composer-main">
@@ -251,7 +251,7 @@ function ReactionButton({ post, kind, user, onRequireLogin }: { post: TimelinePo
   const label = kind === "like" ? "いいね" : kind === "repost" ? "リポスト" : "ブックマーク";
   if (!user) return <button onClick={onRequireLogin} aria-label={label}><span><Icon size={18} /></span>{count !== undefined && <small>{count || ""}</small>}</button>;
   return (
-    <fetcher.Form method="post">
+    <fetcher.Form method="post" action="?index">
       <input type="hidden" name="intent" value="toggleReaction" /><input type="hidden" name="postId" value={post.id} /><input type="hidden" name="kind" value={kind} />
       <button type="submit" disabled={fetcher.state !== "idle"} className={active ? (kind === "like" ? "liked" : kind === "repost" ? "reposted" : "bookmarked") : ""} aria-label={label}>
         <span><Icon size={18} fill={active && kind !== "repost" ? "currentColor" : "none"} /></span>{count !== undefined && <small>{count || ""}</small>}
@@ -269,7 +269,7 @@ function PostCard({ post, user, onRequireLogin }: { post: TimelinePost; user: Se
         <header>
           <div className="post-identity"><strong>{post.name}</strong>{post.handle === "commons_dev" && <span className="verified" aria-label="公式">✓</span>}<span>@{post.handle}</span><span>·</span><span>{timeAgo(post.createdAt)}</span></div>
           {user?.id === post.authorId ? (
-            <deleteFetcher.Form method="post"><input type="hidden" name="intent" value="deletePost" /><input type="hidden" name="postId" value={post.id} /><button type="submit" aria-label="削除"><Trash2 size={17} /></button></deleteFetcher.Form>
+            <deleteFetcher.Form method="post" action="?index"><input type="hidden" name="intent" value="deletePost" /><input type="hidden" name="postId" value={post.id} /><button type="submit" aria-label="削除"><Trash2 size={17} /></button></deleteFetcher.Form>
           ) : <button aria-label="その他"><MoreHorizontal size={19} /></button>}
         </header>
         <p>{post.body}</p>
@@ -306,7 +306,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         <button className="brand" aria-label="Commons ホーム" onClick={() => setActiveNav("ホーム")}><span className="brand-mark"><span /></span><span className="brand-name">Commons</span><span className="brand-beta">BETA</span></button>
         <nav className="main-nav" aria-label="メインナビゲーション">{navItems.map(({ label, icon: Icon }) => <button key={label} className={activeNav === label ? "nav-item active" : "nav-item"} onClick={() => setActiveNav(label)}><span className="nav-icon-wrap"><Icon size={23} strokeWidth={activeNav === label ? 2.5 : 1.9} /></span><span>{label}</span></button>)}</nav>
         <button className="post-button" onClick={() => user ? document.querySelector<HTMLTextAreaElement>("#composer")?.focus() : requireLogin()}><Feather size={19} /><span>投稿する</span></button>
-        {user ? <div className="account-switcher"><UserAvatar user={user} small /><span className="account-copy"><strong>{user.displayName}</strong><small>@{user.handle}</small></span><Form method="post"><input type="hidden" name="intent" value="logout" /><button className="icon-button" type="submit" aria-label="ログアウト"><LogOut size={17} /></button></Form></div> : <button className="account-switcher logged-out" onClick={requireLogin}><LogIn size={20} /><span className="account-copy"><strong>ログイン</strong><small>または新規登録</small></span></button>}
+        {user ? <div className="account-switcher"><UserAvatar user={user} small /><span className="account-copy"><strong>{user.displayName}</strong><small>@{user.handle}</small></span><Form method="post" action="?index"><input type="hidden" name="intent" value="logout" /><button className="icon-button" type="submit" aria-label="ログアウト"><LogOut size={17} /></button></Form></div> : <button className="account-switcher logged-out" onClick={requireLogin}><LogIn size={20} /><span className="account-copy"><strong>ログイン</strong><small>または新規登録</small></span></button>}
       </div></aside>
 
       <section className="feed-column">
