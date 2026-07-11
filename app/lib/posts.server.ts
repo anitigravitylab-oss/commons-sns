@@ -104,3 +104,24 @@ export async function getBookmarkedPosts(env: AppEnv, userId: string): Promise<T
 
   return hydratePosts(env, result.results ?? [], userId);
 }
+
+export async function getUserPosts(
+  env: AppEnv,
+  profileUserId: string,
+  viewerId: string | null,
+): Promise<TimelinePost[]> {
+  const result = await env.DB.prepare(
+    `SELECT ${POST_SELECT_SQL}
+     FROM posts p
+     JOIN users u ON u.id = p.author_id
+     WHERE p.author_id = ?
+       AND p.deleted_at IS NULL
+       AND p.visibility = 'public'
+     ORDER BY p.created_at DESC
+     LIMIT 100`,
+  )
+    .bind(profileUserId)
+    .all<PostRow>();
+
+  return hydratePosts(env, result.results ?? [], viewerId);
+}
