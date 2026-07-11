@@ -2,6 +2,18 @@ import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestora
 import type { Route } from "./+types/root";
 import "./globals.css";
 
+const quickLinkStyle = {
+  border: "1px solid rgba(23, 32, 51, 0.14)",
+  borderRadius: 999,
+  padding: "9px 14px",
+  background: "rgba(255, 255, 255, 0.94)",
+  color: "#34405a",
+  fontSize: 14,
+  fontWeight: 700,
+  textDecoration: "none",
+  boxShadow: "0 8px 24px rgba(23, 32, 51, 0.12)",
+} as const;
+
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ja">
@@ -13,27 +25,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
-        <Link
-          to="/settings"
-          aria-label="アカウント設定"
+        <nav
+          aria-label="クイックメニュー"
           style={{
             position: "fixed",
             right: 16,
             bottom: 77,
             zIndex: 25,
-            border: "1px solid rgba(23, 32, 51, 0.14)",
-            borderRadius: 999,
-            padding: "9px 14px",
-            background: "rgba(255, 255, 255, 0.94)",
-            color: "#34405a",
-            fontSize: 14,
-            fontWeight: 700,
-            textDecoration: "none",
-            boxShadow: "0 8px 24px rgba(23, 32, 51, 0.12)",
+            display: "flex",
+            gap: 8,
           }}
         >
-          設定
-        </Link>
+          <Link to="/bookmarks" style={quickLinkStyle}>
+            ブックマーク
+          </Link>
+          <Link to="/settings" aria-label="アカウント設定" style={quickLinkStyle}>
+            設定
+          </Link>
+        </nav>
         <ScrollRestoration />
         <Scripts />
       </body>
