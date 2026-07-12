@@ -5,9 +5,8 @@ import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
-import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
-import { countCodePoints, sanitizeText } from "../lib/text";
-import { getUserProfileByHandle, updateUserProfile } from "../lib/users.server";
+import { DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
+import { getUserProfileByHandle, ProfileValidationError, updateUserProfile } from "../lib/users.server";
 
 type ActionResult = { ok?: boolean; error?: string };
 
@@ -73,19 +72,19 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     return data<ActionResult>({ error: "不正な操作です。" }, { status: 400 });
   }
 
-  const displayName = sanitizeText(String(formData.get("displayName") ?? ""));
-  const bio = sanitizeText(String(formData.get("bio") ?? ""), { multiline: true });
-  const displayNameLength = countCodePoints(displayName, DISPLAY_NAME_MAX_LENGTH);
-  if (displayNameLength < DISPLAY_NAME_MIN_LENGTH || displayNameLength > DISPLAY_NAME_MAX_LENGTH) {
-    return data<ActionResult>({ error: "表示名は1〜30文字で入力してください。" }, { status: 400 });
-  }
-  if (countCodePoints(bio, BIO_MAX_LENGTH) > BIO_MAX_LENGTH) {
-    return data<ActionResult>({ error: "自己紹介は160文字以内で入力してください。" }, { status: 400 });
-  }
+  const displayName = String(formData.get("displayName") ?? "");
+  const bio = String(formData.get("bio") ?? "");
 
   try {
     await updateUserProfile(env, user.id, { displayName, bio });
   } catch (error) {
+    if (error instanceof ProfileValidationError) {
+      const message =
+        error.code === "displayNameLength"
+          ? "表示名は1〜30文字で入力してください。"
+          : "自己紹介は160文字以内で入力してください。";
+      return data<ActionResult>({ error: message }, { status: 400 });
+    }
     console.error("Failed to update profile", error);
     return data<ActionResult>({ error: "プロフィールを更新できませんでした。" }, { status: 500 });
   }
