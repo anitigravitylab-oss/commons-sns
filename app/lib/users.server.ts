@@ -20,7 +20,11 @@ export class ProfileValidationError extends Error {
   readonly code: ProfileValidationErrorCode;
 
   constructor(code: ProfileValidationErrorCode) {
-    super(code === "displayNameLength" ? "displayName must be between 1 and 30 characters" : "bio must be 160 characters or fewer");
+    super(
+      code === "displayNameLength"
+        ? "displayName must be between 1 and 30 characters"
+        : "bio must be 160 characters or fewer",
+    );
     this.name = "ProfileValidationError";
     this.code = code;
   }
