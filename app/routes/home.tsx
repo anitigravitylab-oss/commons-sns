@@ -262,6 +262,14 @@ function IntentForm({ intent, fields, fetcher, children, ...formProps }: IntentF
   );
 }
 
+/**
+ * Renders a login or signup modal with authentication fields and controls.
+ *
+ * @param mode - The authentication mode to display.
+ * @param error - An optional error message shown in the form.
+ * @param onClose - Called when the modal is dismissed.
+ * @param onChange - Called when the user switches authentication modes.
+ */
 function AuthModal({
   mode,
   error,
