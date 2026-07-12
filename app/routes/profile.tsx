@@ -5,7 +5,7 @@ import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
-import { DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
+import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
 import { getUserProfileByHandle, ProfileValidationError, updateUserProfile } from "../lib/users.server";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -81,8 +81,8 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     if (error instanceof ProfileValidationError) {
       const message =
         error.code === "displayNameLength"
-          ? "表示名は1〜30文字で入力してください。"
-          : "自己紹介は160文字以内で入力してください。";
+          ? `表示名は${DISPLAY_NAME_MIN_LENGTH}〜${DISPLAY_NAME_MAX_LENGTH}文字で入力してください。`
+          : `自己紹介は${BIO_MAX_LENGTH}文字以内で入力してください。`;
       return data<ActionResult>({ error: message }, { status: 400 });
     }
     console.error("Failed to update profile", error);
