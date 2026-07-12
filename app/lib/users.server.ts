@@ -16,15 +16,16 @@ export type UserProfile = {
 
 export type ProfileValidationErrorCode = "displayNameLength" | "bioLength";
 
+const PROFILE_VALIDATION_MESSAGES: Record<ProfileValidationErrorCode, string> = {
+  displayNameLength: `displayName must be between ${DISPLAY_NAME_MIN_LENGTH} and ${DISPLAY_NAME_MAX_LENGTH} characters`,
+  bioLength: `bio must be ${BIO_MAX_LENGTH} characters or fewer`,
+};
+
 export class ProfileValidationError extends Error {
   readonly code: ProfileValidationErrorCode;
 
   constructor(code: ProfileValidationErrorCode) {
-    super(
-      code === "displayNameLength"
-        ? "displayName must be between 1 and 30 characters"
-        : "bio must be 160 characters or fewer",
-    );
+    super(PROFILE_VALIDATION_MESSAGES[code]);
     this.name = "ProfileValidationError";
     this.code = code;
   }
