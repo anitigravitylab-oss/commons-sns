@@ -100,23 +100,29 @@ export async function findUserForLogin(env: AppEnv, handle: string) {
 export async function getSessionUser(request: Request, env: AppEnv): Promise<SessionUser | null> {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
-  const idHash = await sha256(token);
-  const row = await env.DB.prepare(
-    `SELECT u.id, u.handle, u.display_name, u.role
-     FROM sessions s
-     JOIN users u ON u.id = s.user_id
-     WHERE s.id_hash = ? AND s.expires_at > datetime('now')
-     LIMIT 1`,
-  )
-    .bind(idHash)
-    .first<Omit<AuthRow, "password_hash" | "password_salt">>();
-  if (!row) return null;
-  return {
-    id: row.id,
-    handle: row.handle,
-    displayName: row.display_name,
-    role: row.role,
-  };
+
+  try {
+    const idHash = await sha256(token);
+    const row = await env.DB.prepare(
+      `SELECT u.id, u.handle, u.display_name, u.role
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       WHERE s.id_hash = ? AND s.expires_at > datetime('now')
+       LIMIT 1`,
+    )
+      .bind(idHash)
+      .first<Omit<AuthRow, "password_hash" | "password_salt">>();
+    if (!row) return null;
+    return {
+      id: row.id,
+      handle: row.handle,
+      displayName: row.display_name,
+      role: row.role,
+    };
+  } catch (error) {
+    console.error("getSessionUser failed", error);
+    return null;
+  }
 }
 
 export async function createSession(env: AppEnv, userId: string) {
