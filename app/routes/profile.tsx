@@ -29,10 +29,12 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
-  // A transient read failure should still render the profile header, so fall
-  // back to an empty page rather than 500-ing the whole route.
+  // A transient read failure should still render the profile header, so flag the
+  // error and show a load message rather than 500-ing the whole route or
+  // implying a profile with posts is empty.
   let posts: TimelinePost[] = [];
   let hasNextPage = false;
+  let postsError = false;
   try {
     const fetchedPosts = await getUserPosts(env, profile.id, user?.id ?? null, {
       limit: PROFILE_PAGE_SIZE + 1,
@@ -42,6 +44,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE;
   } catch (error) {
     console.error("Failed to load profile posts", error);
+    postsError = true;
   }
 
   return {
@@ -50,6 +53,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     posts,
     page,
     hasNextPage,
+    postsError,
   };
 }
 
@@ -122,7 +126,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
 }
 
 export default function ProfilePage({ loaderData }: Route.ComponentProps) {
-  const { user, profile, posts, page, hasNextPage } = loaderData;
+  const { user, profile, posts, page, hasNextPage, postsError } = loaderData;
   const fetcher = useFetcher<ActionResult>();
   const isOwner = user?.id === profile.id;
   const isSaving = fetcher.state !== "idle";
@@ -221,12 +225,11 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
                   defaultValue={profile.displayName}
                   required
                   minLength={DISPLAY_NAME_MIN_LENGTH}
-                  maxLength={DISPLAY_NAME_MAX_LENGTH}
                 />
               </label>
               <label style={{ display: "grid", gap: 6, fontSize: 13, fontWeight: 700 }}>
                 自己紹介
-                <textarea name="bio" defaultValue={profile.bio} maxLength={BIO_MAX_LENGTH} rows={4} />
+                <textarea name="bio" defaultValue={profile.bio} rows={4} />
               </label>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                 <button
@@ -249,7 +252,11 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
         </section>
 
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #e7e9ed", fontWeight: 800 }}>投稿</div>
-        {posts.length > 0 ? (
+        {postsError ? (
+          <div className="form-error" role="alert" style={{ margin: 18 }}>
+            投稿を読み込めませんでした。時間をおいて再読み込みしてください。
+          </div>
+        ) : posts.length > 0 ? (
           <>
             {posts.map((post) => (
               <ProfilePost key={post.id} post={post} />

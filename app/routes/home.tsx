@@ -147,6 +147,13 @@ async function handleSignup(env: AppEnv, formData: FormData) {
 async function handleLogin(env: AppEnv, formData: FormData) {
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
+  // Reject out-of-bounds passwords before the deliberately expensive dummy
+  // PBKDF2 path so an oversized password can't turn the timing mitigation into a
+  // CPU/memory amplifier. The same generic error keeps handle existence hidden
+  // (the bound is on the attacker-supplied password, not on the handle).
+  if (password.length < 8 || password.length > 128) {
+    return fail("IDまたはパスワードが違います。", 401, "login");
+  }
   const user = await findUserForLogin(env, handle);
   const verified = await verifyPasswordOrDummy(password, user?.password_hash, user?.password_salt);
   if (!user || !verified) {
@@ -304,7 +311,7 @@ function AuthModal({
           {mode === "signup" && (
             <label>
               表示名
-              <input name="displayName" required maxLength={30} autoComplete="name" placeholder="例：あおい" />
+              <input name="displayName" required autoComplete="name" placeholder="例：あおい" />
             </label>
           )}
           <label>
