@@ -293,13 +293,7 @@ function AuthModal({
   }, [mode]);
 
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
+    <div className="modal-backdrop" role="presentation">
       <dialog
         ref={dialogRef}
         className="auth-modal"
