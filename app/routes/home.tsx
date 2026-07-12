@@ -274,24 +274,33 @@ function AuthModal({
   onChange: (mode: "login" | "signup") => void;
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
+
   useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    dialogRef.current?.querySelector<HTMLInputElement>("input:not([type='hidden'])")?.focus();
-    return () => previouslyFocused?.focus();
+    if (!dialog.open) dialog.showModal();
+
+    return () => {
+      if (dialog.open) dialog.close();
+      previouslyFocused?.focus();
+    };
   }, []);
+
+  useEffect(() => {
+    dialogRef.current?.querySelector<HTMLInputElement>("input:not([type='hidden'])")?.focus();
+  }, [mode]);
+
   return (
-    <div
-      className="modal-backdrop"
-      role="presentation"
-      onMouseDown={(event) => event.target === event.currentTarget && onClose()}
-    >
+    <div className="modal-backdrop" role="presentation">
       <dialog
         ref={dialogRef}
-        open
         className="auth-modal"
         aria-labelledby="auth-title"
-        onKeyDown={(event) => {
-          if (event.key === "Escape") onClose();
+        onCancel={(event) => {
+          event.preventDefault();
+          onClose();
         }}
       >
         <button className="modal-close" onClick={onClose} aria-label="閉じる">
