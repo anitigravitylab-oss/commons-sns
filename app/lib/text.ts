@@ -14,9 +14,9 @@ export function sliceCodePoints(value: string, max: number): string {
   const points: string[] = [];
   let count = 0;
   for (const point of value) {
-    if (count === max) return points.join("");
     points.push(point);
     count += 1;
+    if (count === max) return points.join("");
   }
   return value;
 }
