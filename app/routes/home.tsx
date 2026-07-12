@@ -304,7 +304,7 @@ function AuthModal({
         ref={dialogRef}
         className="auth-modal"
         aria-labelledby="auth-title"
-        onMouseDown={(event) => {
+        onPointerDown={(event) => {
           const bounds = event.currentTarget.getBoundingClientRect();
           const clickedOutside =
             event.clientX < bounds.left ||
