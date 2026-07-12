@@ -1,5 +1,6 @@
 import type { AppEnv } from "../cloudflare";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "./profile-constraints";
+import { countCodePoints, sanitizeText } from "./text";
 
 export type UserProfile = {
   id: string;
@@ -59,12 +60,13 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
 }
 
 export async function updateUserProfile(env: AppEnv, userId: string, values: { displayName: string; bio: string }) {
-  const displayName = values.displayName.trim();
-  const bio = values.bio.trim();
-  if (displayName.length < DISPLAY_NAME_MIN_LENGTH || displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+  const displayName = sanitizeText(values.displayName);
+  const bio = sanitizeText(values.bio, { multiline: true });
+  const displayNameLength = countCodePoints(displayName, DISPLAY_NAME_MAX_LENGTH);
+  if (displayNameLength < DISPLAY_NAME_MIN_LENGTH || displayNameLength > DISPLAY_NAME_MAX_LENGTH) {
     throw new Error("displayName must be between 1 and 30 characters");
   }
-  if (bio.length > BIO_MAX_LENGTH) {
+  if (countCodePoints(bio, BIO_MAX_LENGTH) > BIO_MAX_LENGTH) {
     throw new Error("bio must be 160 characters or fewer");
   }
 

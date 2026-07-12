@@ -20,8 +20,8 @@ import {
   UserRound,
   UsersRound,
 } from "lucide-react";
-import { type ComponentProps, useEffect, useMemo, useState } from "react";
-import { data, Form, redirect, useFetcher } from "react-router";
+import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
+import { data, Form, redirect, useFetcher, useNavigate } from "react-router";
 import type { Route } from "./+types/home";
 import { cloudflareContext, type AppEnv } from "../cloudflare";
 import {
@@ -30,11 +30,13 @@ import {
   findUserForLogin,
   getSessionUser,
   hashPassword,
-  verifyPassword,
+  verifyPasswordOrDummy,
 } from "../lib/auth.server";
 import type { SessionUser } from "../lib/auth.server";
+import { avatarClass, normalizeDate, timeAgo } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
 import type { TimelinePost } from "../lib/posts.server";
+import { countCodePoints, isReservedHandle, sanitizeText, sliceCodePoints } from "../lib/text";
 
 type ActionResult = {
   ok?: boolean;
@@ -54,7 +56,12 @@ export function meta() {
 export async function loader({ request, context }: Route.LoaderArgs) {
   const env = envFrom(context);
   const user = await getSessionUser(request, env);
-  return { user, posts: await getTimeline(env, user?.id ?? null) };
+  try {
+    return { user, posts: await getTimeline(env, user?.id ?? null), timelineError: false };
+  } catch (error) {
+    console.error("getTimeline failed", error);
+    return { user, posts: [] as TimelinePost[], timelineError: true };
+  }
 }
 
 function envFrom(context: Route.LoaderArgs["context"]) {
@@ -72,7 +79,13 @@ const ok = () => data<ActionResult>({ ok: true });
 
 export async function action({ request, context }: Route.ActionArgs) {
   const env = envFrom(context);
-  const formData = await request.formData();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch (error) {
+    console.error("action formData failed", error);
+    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
+  }
   const intent = formText(formData, "intent");
 
   if (intent === "signup") return handleSignup(env, formData);
@@ -82,21 +95,30 @@ export async function action({ request, context }: Route.ActionArgs) {
   const user = await getSessionUser(request, env);
   if (!user) return fail("この操作にはログインが必要です。", 401, "login");
 
-  if (intent === "createPost") return handleCreatePost(env, formData, user);
-  if (intent === "toggleReaction") return handleToggleReaction(env, formData, user);
-  if (intent === "deletePost") return handleDeletePost(env, formData, user);
+  try {
+    if (intent === "createPost") return await handleCreatePost(env, formData, user);
+    if (intent === "toggleReaction") return await handleToggleReaction(env, formData, user);
+    if (intent === "deletePost") return await handleDeletePost(env, formData, user);
+  } catch (error) {
+    console.error("action handler failed", error);
+    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
+  }
 
   return fail("不明な操作です。", 400);
 }
 
 async function handleSignup(env: AppEnv, formData: FormData) {
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
-  const displayName = formText(formData, "displayName");
+  const displayName = sanitizeText(formText(formData, "displayName"));
   const password = String(formData.get("password") ?? "");
   if (!/^[a-z0-9_]{3,20}$/.test(handle)) {
     return fail("IDは3〜20文字の半角英数字と_で入力してください。", 400, "signup");
   }
-  if (displayName.length < 1 || displayName.length > 30) {
+  if (isReservedHandle(handle)) {
+    return fail("このIDは使用できません。", 400, "signup");
+  }
+  const displayNameLength = countCodePoints(displayName, 30);
+  if (displayNameLength < 1 || displayNameLength > 30) {
     return fail("表示名は1〜30文字で入力してください。", 400, "signup");
   }
   if (password.length < 8 || password.length > 128) {
@@ -111,8 +133,13 @@ async function handleSignup(env: AppEnv, formData: FormData) {
     )
       .bind(userId, handle, displayName, hash, salt)
       .run();
-  } catch {
-    return fail("そのIDはすでに使われています。", 409, "signup");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE|constraint/i.test(message)) {
+      return fail("そのIDはすでに使われています。", 409, "signup");
+    }
+    console.error("handleSignup insert failed", error);
+    return fail("登録できませんでした。時間をおいてもう一度お試しください。", 500, "signup");
   }
   return redirect("/", { headers: { "Set-Cookie": await createSession(env, userId) } });
 }
@@ -120,12 +147,12 @@ async function handleSignup(env: AppEnv, formData: FormData) {
 async function handleLogin(env: AppEnv, formData: FormData) {
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
+  if (password.length < 8 || password.length > 128) {
+    return fail("IDまたはパスワードが違います。", 401, "login");
+  }
   const user = await findUserForLogin(env, handle);
-  if (
-    !user?.password_hash ||
-    !user.password_salt ||
-    !(await verifyPassword(password, user.password_hash, user.password_salt))
-  ) {
+  const verified = await verifyPasswordOrDummy(password, user?.password_hash, user?.password_salt);
+  if (!user || !verified) {
     return fail("IDまたはパスワードが違います。", 401, "login");
   }
   return redirect("/", { headers: { "Set-Cookie": await createSession(env, user.id) } });
@@ -136,10 +163,10 @@ async function handleLogout(env: AppEnv, request: Request) {
 }
 
 async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUser) {
-  const body = formText(formData, "body");
-  if (!body || body.length > 280) return fail("投稿は1〜280文字で入力してください。", 400);
+  const clean = sanitizeText(formText(formData, "body"), { multiline: true });
+  if (!clean || countCodePoints(clean, 280) > 280) return fail("投稿は1〜280文字で入力してください。", 400);
   await env.DB.prepare("INSERT INTO posts (id, author_id, body, visibility) VALUES (?, ?, ?, 'public')")
-    .bind(crypto.randomUUID(), user.id, body)
+    .bind(crypto.randomUUID(), user.id, clean)
     .run();
   return ok();
 }
@@ -160,8 +187,12 @@ async function handleToggleReaction(env: AppEnv, formData: FormData, user: Sessi
       .bind(user.id, postId, kind)
       .run();
   } else {
-    await env.DB.prepare("INSERT INTO post_reactions (user_id, post_id, kind) VALUES (?, ?, ?)")
-      .bind(user.id, postId, kind)
+    await env.DB.prepare(
+      `INSERT INTO post_reactions (user_id, post_id, kind)
+       SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM posts WHERE id = ? AND deleted_at IS NULL)
+       ON CONFLICT (user_id, post_id, kind) DO NOTHING`,
+    )
+      .bind(user.id, postId, kind, postId)
       .run();
   }
   return ok();
@@ -189,26 +220,12 @@ const navItems = [
 ];
 
 const mobileNavItems = [
-  { id: "home", icon: Home },
-  { id: "search", icon: Search },
-  { id: "compose", icon: Feather },
-  { id: "notifications", icon: Bell },
-  { id: "profile", icon: UserRound },
+  { id: "home", icon: Home, label: "ホーム" },
+  { id: "search", icon: Search, label: "検索" },
+  { id: "compose", icon: Feather, label: "投稿する" },
+  { id: "notifications", icon: Bell, label: "通知" },
+  { id: "profile", icon: UserRound, label: "プロフィール" },
 ];
-
-function timeAgo(value: string) {
-  const normalized = value.endsWith("Z") || value.includes("+") ? value : `${value.replace(" ", "T")}Z`;
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(normalized).getTime()) / 1000));
-  if (seconds < 60) return "今";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}時間`;
-  return `${Math.floor(seconds / 86_400)}日`;
-}
-
-function avatarClass(handle: string) {
-  const classes = ["avatar-blue", "avatar-violet", "avatar-orange", "avatar-green"];
-  return classes[handle.charCodeAt(0) % classes.length];
-}
 
 function UserAvatar({ user, small = false }: { user: Pick<SessionUser, "displayName" | "handle">; small?: boolean }) {
   return (
@@ -256,13 +273,27 @@ function AuthModal({
   onClose: () => void;
   onChange: (mode: "login" | "signup") => void;
 }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialogRef.current?.querySelector<HTMLInputElement>("input:not([type='hidden'])")?.focus();
+    return () => previouslyFocused?.focus();
+  }, []);
   return (
     <div
       className="modal-backdrop"
       role="presentation"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
     >
-      <dialog open className="auth-modal" aria-labelledby="auth-title">
+      <dialog
+        ref={dialogRef}
+        open
+        className="auth-modal"
+        aria-labelledby="auth-title"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onClose();
+        }}
+      >
         <button className="modal-close" onClick={onClose} aria-label="閉じる">
           ×
         </button>
@@ -275,7 +306,7 @@ function AuthModal({
           {mode === "signup" && (
             <label>
               表示名
-              <input name="displayName" required maxLength={30} autoComplete="name" placeholder="例：あおい" />
+              <input name="displayName" required autoComplete="name" placeholder="例：あおい" />
             </label>
           )}
           <label>
@@ -330,6 +361,8 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
     );
   }
 
+  const remaining = 280 - countCodePoints(draft);
+
   return (
     <IntentForm fetcher={fetcher} intent="createPost" className="composer">
       <UserAvatar user={user} />
@@ -338,7 +371,7 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
           id="composer"
           name="body"
           value={draft}
-          onChange={(event) => setDraft(event.target.value.slice(0, 280))}
+          onChange={(event) => setDraft(sliceCodePoints(event.target.value, 280))}
           placeholder="いまどうしてる？"
           rows={2}
         />
@@ -350,9 +383,7 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
             <button type="button">全員に公開</button>
           </div>
           <div className="composer-submit">
-            {draft.length > 0 && (
-              <span className={draft.length > 260 ? "limit near" : "limit"}>{280 - draft.length}</span>
-            )}
+            {draft.length > 0 && <span className={remaining < 20 ? "limit near" : "limit"}>{remaining}</span>}
             <button type="submit" disabled={!draft.trim() || fetcher.state !== "idle"}>
               {fetcher.state === "idle" ? "投稿する" : "送信中"}
             </button>
@@ -423,7 +454,9 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
             )}
             <span>@{post.handle}</span>
             <span>·</span>
-            <span>{timeAgo(post.createdAt)}</span>
+            <time dateTime={normalizeDate(post.createdAt)} suppressHydrationWarning>
+              {timeAgo(post.createdAt)}
+            </time>
           </div>
           {user?.id === post.authorId ? (
             <IntentForm fetcher={deleteFetcher} intent="deletePost" fields={{ postId: post.id }}>
@@ -455,7 +488,8 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 }
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
-  const { user, posts } = loaderData;
+  const { user, posts, timelineError } = loaderData;
+  const navigate = useNavigate();
   const [query, setQuery] = useState("");
   const [activeNav, setActiveNav] = useState("ホーム");
   const [activeTab, setActiveTab] = useState<"おすすめ" | "フォロー中">("おすすめ");
@@ -565,15 +599,24 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         </div>
         <Composer user={user} onRequireLogin={requireLogin} />
         <div className="feed-status">
-          <span>{activeTab}の投稿</span>
+          <span aria-live="polite">{activeTab}の投稿</span>
           <button>新しい順</button>
         </div>
-        <div className="posts" aria-live="polite">
-          {visiblePosts.length === 0 ? (
+        {timelineError && (
+          <div className="form-error" role="alert">
+            タイムラインを読み込めませんでした。時間をおいて再読み込みしてください。
+          </div>
+        )}
+        <div className="posts">
+          {visiblePosts.length === 0 && !timelineError ? (
             <div className="empty-state">
               <Search size={28} />
               <strong>投稿が見つかりません</strong>
-              <span>{query ? "別の言葉で検索してみてください。" : "最初の投稿をしてみましょう。"}</span>
+              <span>
+                {query
+                  ? "検索は読み込み済みのタイムライン内のみが対象です。別の言葉でお試しください。"
+                  : "最初の投稿をしてみましょう。"}
+              </span>
             </div>
           ) : (
             visiblePosts.map((post) => <PostCard key={post.id} post={post} user={user} onRequireLogin={requireLogin} />)
@@ -585,7 +628,11 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         <div className="rightbar-inner">
           <label className="search-box">
             <Search size={18} />
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Commonsを検索" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="タイムライン内を検索"
+            />
             {query && (
               <button onClick={() => setQuery("")} aria-label="検索を消す">
                 ×
@@ -620,8 +667,8 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
           <section className="side-card trends-card">
             <div className="card-title">
               <h2>いまの話題</h2>
-              <button>
-                <CircleEllipsis size={19} />
+              <button aria-label="トレンドの設定">
+                <CircleEllipsis size={19} aria-hidden={true} />
               </button>
             </div>
             {[
@@ -643,15 +690,32 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         </div>
       </aside>
       <nav className="mobile-nav" aria-label="モバイルナビゲーション">
-        {mobileNavItems.map(({ id, icon: Icon }) => (
-          <button
-            key={id}
-            className={id === "home" ? "active" : ""}
-            onClick={id === "compose" && !user ? requireLogin : undefined}
-          >
-            <Icon size={23} />
-          </button>
-        ))}
+        {mobileNavItems.map(({ id, icon: Icon, label }) => {
+          const disabled = id === "search" || id === "notifications";
+          const handleClick = () => {
+            if (id === "home") {
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            } else if (id === "compose") {
+              if (user) document.querySelector<HTMLTextAreaElement>("#composer")?.focus();
+              else requireLogin();
+            } else if (id === "profile") {
+              if (user) navigate("/profile");
+              else requireLogin();
+            }
+          };
+          return (
+            <button
+              key={id}
+              className={id === "home" ? "active" : ""}
+              aria-label={label}
+              disabled={disabled}
+              title={disabled ? "準備中" : undefined}
+              onClick={disabled ? undefined : handleClick}
+            >
+              <Icon size={23} aria-hidden={true} />
+            </button>
+          );
+        })}
       </nav>
       {visibleAuthMode && (
         <AuthModal

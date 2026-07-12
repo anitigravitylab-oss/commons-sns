@@ -1,7 +1,7 @@
 import { data, Form, Link, redirect, useNavigation } from "react-router";
 import type { Route } from "./+types/settings";
 import { cloudflareContext } from "../cloudflare";
-import { clearSessionCookie, findUserForLogin, getSessionUser, verifyPassword } from "../lib/auth.server";
+import { clearSessionCookie, findUserForLogin, getSessionUser, verifyPasswordOrDummy } from "../lib/auth.server";
 
 type ActionResult = { error?: string };
 
@@ -36,16 +36,22 @@ export async function action({ request, context }: Route.ActionArgs) {
   }
 
   const account = await findUserForLogin(env, user.handle);
-  if (
-    !account?.password_hash ||
-    !account.password_salt ||
-    !(await verifyPassword(password, account.password_hash, account.password_salt))
-  ) {
+  if (!(await verifyPasswordOrDummy(password, account?.password_hash, account?.password_salt))) {
     return data<ActionResult>({ error: "パスワードが違います。" }, { status: 401 });
   }
 
   try {
-    await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id).run();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM post_reactions WHERE user_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM post_reactions WHERE post_id IN (SELECT id FROM posts WHERE author_id = ?)").bind(
+        user.id,
+      ),
+      env.DB.prepare("DELETE FROM follows WHERE follower_id = ? OR following_id = ?").bind(user.id, user.id),
+      env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM media WHERE owner_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM posts WHERE author_id = ?").bind(user.id),
+      env.DB.prepare("DELETE FROM users WHERE id = ?").bind(user.id),
+    ]);
   } catch (error) {
     console.error("Failed to delete account", error);
     return data<ActionResult>(

@@ -41,19 +41,32 @@ const POST_SELECT_SQL = `
   (SELECT COUNT(*) FROM post_reactions lr WHERE lr.post_id = p.id AND lr.kind = 'like') AS likes
 `;
 
+const REACTION_BATCH_SIZE = 50;
+
 async function hydratePosts(env: AppEnv, rows: PostRow[], viewerId: string | null): Promise<TimelinePost[]> {
   const reactions = new Map<string, Set<ReactionRow["kind"]>>();
   if (viewerId && rows.length > 0) {
-    const placeholders = rows.map(() => "?").join(",");
-    const reactionResult = await env.DB.prepare(
-      `SELECT post_id, kind FROM post_reactions WHERE user_id = ? AND post_id IN (${placeholders})`,
-    )
-      .bind(viewerId, ...rows.map((row) => row.id))
-      .all<ReactionRow>();
-    for (const reaction of reactionResult.results ?? []) {
-      const set = reactions.get(reaction.post_id) ?? new Set<ReactionRow["kind"]>();
-      set.add(reaction.kind);
-      reactions.set(reaction.post_id, set);
+    const ids = rows.map((row) => row.id);
+    const batches: string[][] = [];
+    for (let start = 0; start < ids.length; start += REACTION_BATCH_SIZE) {
+      batches.push(ids.slice(start, start + REACTION_BATCH_SIZE));
+    }
+    const batchResults = await Promise.all(
+      batches.map((batch) => {
+        const placeholders = batch.map(() => "?").join(",");
+        return env.DB.prepare(
+          `SELECT post_id, kind FROM post_reactions WHERE user_id = ? AND post_id IN (${placeholders})`,
+        )
+          .bind(viewerId, ...batch)
+          .all<ReactionRow>();
+      }),
+    );
+    for (const reactionResult of batchResults) {
+      for (const reaction of reactionResult.results ?? []) {
+        const set = reactions.get(reaction.post_id) ?? new Set<ReactionRow["kind"]>();
+        set.add(reaction.kind);
+        reactions.set(reaction.post_id, set);
+      }
     }
   }
 

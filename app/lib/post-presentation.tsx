@@ -18,7 +18,9 @@ export function normalizeDate(value: string) {
 }
 
 export function timeAgo(value: string) {
-  const seconds = Math.max(0, Math.floor((Date.now() - new Date(normalizeDate(value)).getTime()) / 1000));
+  const parsed = new Date(normalizeDate(value)).getTime();
+  if (Number.isNaN(parsed)) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - parsed) / 1000));
   if (seconds < 60) return "今";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}分`;
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}時間`;
@@ -27,7 +29,8 @@ export function timeAgo(value: string) {
 
 export function avatarClass(handle: string) {
   const classes = ["avatar-blue", "avatar-violet", "avatar-orange", "avatar-green"];
-  return classes[handle.charCodeAt(0) % classes.length];
+  const code = handle.charCodeAt(0);
+  return classes[(Number.isNaN(code) ? 0 : code) % classes.length];
 }
 
 export function isOfficialHandle(handle: string) {
@@ -45,7 +48,9 @@ export function PostIdentity({ name, handle, createdAt }: { name: string; handle
       )}
       <span>@{handle}</span>
       <span>·</span>
-      <span>{timeAgo(createdAt)}</span>
+      <time dateTime={normalizeDate(createdAt)} suppressHydrationWarning>
+        {timeAgo(createdAt)}
+      </time>
     </div>
   );
 }

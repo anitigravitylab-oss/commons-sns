@@ -140,3 +140,16 @@ export async function destroySession(request: Request, env: AppEnv) {
       .run();
   return clearSessionCookie();
 }
+
+const DUMMY_SALT = "00000000000000000000000000000000";
+const DUMMY_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
+
+export async function verifyPasswordOrDummy(
+  password: string,
+  hash: string | null | undefined,
+  salt: string | null | undefined,
+): Promise<boolean> {
+  if (hash && salt) return verifyPassword(password, hash, salt);
+  await verifyPassword(password, DUMMY_HASH, DUMMY_SALT);
+  return false;
+}

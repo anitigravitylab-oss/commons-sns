@@ -16,7 +16,17 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/");
-  return { user, posts: await getBookmarkedPosts(env, user.id) };
+
+  let posts: TimelinePost[] = [];
+  let bookmarksError = false;
+  try {
+    posts = await getBookmarkedPosts(env, user.id);
+  } catch (error) {
+    console.error("Failed to load bookmarks", error);
+    bookmarksError = true;
+  }
+
+  return { user, posts, bookmarksError };
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
@@ -102,7 +112,7 @@ function BookmarkCard({ post }: { post: TimelinePost }) {
 }
 
 export default function BookmarksPage({ loaderData }: Route.ComponentProps) {
-  const { user, posts } = loaderData;
+  const { user, posts, bookmarksError } = loaderData;
 
   return (
     <main style={{ minHeight: "100vh", background: "#fff" }}>
@@ -130,13 +140,18 @@ export default function BookmarksPage({ loaderData }: Route.ComponentProps) {
             ← タイムラインへ戻る
           </Link>
           <h1 style={{ margin: "14px 0 3px", fontSize: 22 }}>ブックマーク</h1>
-          <p style={{ margin: 0, color: "#69717d", fontSize: 13 }}>
-            @{user.handle} · {posts.length}件
+          <p aria-live="polite" style={{ margin: 0, color: "#69717d", fontSize: 13 }}>
+            @{user.handle}
+            {!bookmarksError && ` · ${posts.length}件`}
           </p>
         </header>
 
-        <div aria-live="polite">
-          {posts.length === 0 ? (
+        <div>
+          {bookmarksError ? (
+            <div className="form-error" role="alert" style={{ margin: 18 }}>
+              ブックマークを読み込めませんでした。時間をおいて再読み込みしてください。
+            </div>
+          ) : posts.length === 0 ? (
             <div className="empty-state" style={{ minHeight: 320 }}>
               <Bookmark size={30} />
               <strong>ブックマークはまだありません</strong>

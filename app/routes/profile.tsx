@@ -6,6 +6,7 @@ import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
+import { countCodePoints, sanitizeText } from "../lib/text";
 import { getUserProfileByHandle, updateUserProfile } from "../lib/users.server";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -27,17 +28,29 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   const user = await getSessionUser(request, env);
   const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
-  const fetchedPosts = await getUserPosts(env, profile.id, user?.id ?? null, {
-    limit: PROFILE_PAGE_SIZE + 1,
-    offset: (page - 1) * PROFILE_PAGE_SIZE,
-  });
+
+  let posts: TimelinePost[] = [];
+  let hasNextPage = false;
+  let postsError = false;
+  try {
+    const fetchedPosts = await getUserPosts(env, profile.id, user?.id ?? null, {
+      limit: PROFILE_PAGE_SIZE + 1,
+      offset: (page - 1) * PROFILE_PAGE_SIZE,
+    });
+    posts = fetchedPosts.slice(0, PROFILE_PAGE_SIZE);
+    hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE;
+  } catch (error) {
+    console.error("Failed to load profile posts", error);
+    postsError = true;
+  }
 
   return {
     user,
     profile,
-    posts: fetchedPosts.slice(0, PROFILE_PAGE_SIZE),
+    posts,
     page,
-    hasNextPage: fetchedPosts.length > PROFILE_PAGE_SIZE,
+    hasNextPage,
+    postsError,
   };
 }
 
@@ -60,12 +73,13 @@ export async function action({ request, context, params }: Route.ActionArgs) {
     return data<ActionResult>({ error: "不正な操作です。" }, { status: 400 });
   }
 
-  const displayName = String(formData.get("displayName") ?? "").trim();
-  const bio = String(formData.get("bio") ?? "").trim();
-  if (displayName.length < DISPLAY_NAME_MIN_LENGTH || displayName.length > DISPLAY_NAME_MAX_LENGTH) {
+  const displayName = sanitizeText(String(formData.get("displayName") ?? ""));
+  const bio = sanitizeText(String(formData.get("bio") ?? ""), { multiline: true });
+  const displayNameLength = countCodePoints(displayName, DISPLAY_NAME_MAX_LENGTH);
+  if (displayNameLength < DISPLAY_NAME_MIN_LENGTH || displayNameLength > DISPLAY_NAME_MAX_LENGTH) {
     return data<ActionResult>({ error: "表示名は1〜30文字で入力してください。" }, { status: 400 });
   }
-  if (bio.length > BIO_MAX_LENGTH) {
+  if (countCodePoints(bio, BIO_MAX_LENGTH) > BIO_MAX_LENGTH) {
     return data<ActionResult>({ error: "自己紹介は160文字以内で入力してください。" }, { status: 400 });
   }
 
@@ -107,7 +121,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
 }
 
 export default function ProfilePage({ loaderData }: Route.ComponentProps) {
-  const { user, profile, posts, page, hasNextPage } = loaderData;
+  const { user, profile, posts, page, hasNextPage, postsError } = loaderData;
   const fetcher = useFetcher<ActionResult>();
   const isOwner = user?.id === profile.id;
   const isSaving = fetcher.state !== "idle";
@@ -206,12 +220,11 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
                   defaultValue={profile.displayName}
                   required
                   minLength={DISPLAY_NAME_MIN_LENGTH}
-                  maxLength={DISPLAY_NAME_MAX_LENGTH}
                 />
               </label>
               <label style={{ display: "grid", gap: 6, fontSize: 13, fontWeight: 700 }}>
                 自己紹介
-                <textarea name="bio" defaultValue={profile.bio} maxLength={BIO_MAX_LENGTH} rows={4} />
+                <textarea name="bio" defaultValue={profile.bio} rows={4} />
               </label>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
                 <button
@@ -234,7 +247,11 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
         </section>
 
         <div style={{ padding: "14px 18px", borderBottom: "1px solid #e7e9ed", fontWeight: 800 }}>投稿</div>
-        {posts.length > 0 ? (
+        {postsError ? (
+          <div className="form-error" role="alert" style={{ margin: 18 }}>
+            投稿を読み込めませんでした。時間をおいて再読み込みしてください。
+          </div>
+        ) : posts.length > 0 ? (
           <>
             {posts.map((post) => (
               <ProfilePost key={post.id} post={post} />
