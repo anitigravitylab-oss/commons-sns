@@ -293,11 +293,26 @@ function AuthModal({
   }, [mode]);
 
   return (
-    <div className="modal-backdrop" role="presentation">
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <dialog
         ref={dialogRef}
         className="auth-modal"
         aria-labelledby="auth-title"
+        onMouseDown={(event) => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          const clickedOutside =
+            event.clientX < bounds.left ||
+            event.clientX > bounds.right ||
+            event.clientY < bounds.top ||
+            event.clientY > bounds.bottom;
+          if (clickedOutside) onClose();
+        }}
         onCancel={(event) => {
           event.preventDefault();
           onClose();
