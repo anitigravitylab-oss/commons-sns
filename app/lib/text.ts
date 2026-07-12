@@ -10,9 +10,15 @@ export function countCodePoints(value: string, limit: number = Number.POSITIVE_I
 
 export function sliceCodePoints(value: string, max: number): string {
   if (max <= 0) return "";
-  const points = [...value];
-  if (points.length <= max) return value;
-  return points.slice(0, max).join("");
+
+  const points: string[] = [];
+  let count = 0;
+  for (const point of value) {
+    if (count === max) return points.join("");
+    points.push(point);
+    count += 1;
+  }
+  return value;
 }
 
 const codePoint = (code: number) => String.fromCharCode(code);
@@ -27,9 +33,7 @@ const INVISIBLE_CLASS =
   codeRange(0x202a, 0x202e) +
   codeRange(0x2066, 0x2069);
 
-const JOINERS_CLASS = codeRange(0x200c, 0x200d);
-
-const SINGLE_LINE_PATTERN = new RegExp(`[${codeRange(0x0000, 0x001f)}${INVISIBLE_CLASS}${JOINERS_CLASS}]`, "gu");
+const SINGLE_LINE_PATTERN = new RegExp(`[${codeRange(0x0000, 0x001f)}${INVISIBLE_CLASS}]`, "gu");
 const MULTILINE_PATTERN = new RegExp(
   `[${codeRange(0x0000, 0x0008)}${codeRange(0x000b, 0x001f)}${INVISIBLE_CLASS}]`,
   "gu",
