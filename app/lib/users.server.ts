@@ -76,6 +76,12 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
   };
 }
 
+/**
+ * Sanitizes and updates a user's display name and bio.
+ *
+ * @param values - The display name and bio to save.
+ * @throws `ProfileValidationError` if the display name is shorter than the minimum length or longer than the maximum length, or if the bio exceeds its allowed length.
+ */
 export async function updateUserProfile(env: AppEnv, userId: string, values: { displayName: string; bio: string }) {
   const displayName = sanitizeText(values.displayName);
   const bio = sanitizeText(values.bio, { multiline: true });

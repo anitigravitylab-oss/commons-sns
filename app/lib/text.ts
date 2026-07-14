@@ -8,6 +8,13 @@ export function countCodePoints(value: string, limit: number = Number.POSITIVE_I
   return count;
 }
 
+/**
+ * Truncates a string to a maximum number of Unicode code points.
+ *
+ * @param value - The string to truncate
+ * @param max - The maximum number of code points to include
+ * @returns The truncated string, or an empty string when `max` is less than or equal to zero
+ */
 export function sliceCodePoints(value: string, max: number): string {
   if (max <= 0) return "";
 

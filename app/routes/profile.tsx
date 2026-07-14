@@ -60,6 +60,12 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
+/**
+ * Processes authenticated profile updates for the profile identified by the route handle.
+ *
+ * @returns A redirect for unauthenticated requests, an error response for invalid or unauthorized requests, or `{ ok: true }` after a successful update.
+ * @throws A 404 response when the profile handle does not identify an existing profile.
+ */
 export async function action({ request, context, params }: Route.ActionArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);

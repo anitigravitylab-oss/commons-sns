@@ -97,6 +97,11 @@ export async function findUserForLogin(env: AppEnv, handle: string) {
     .first<AuthRow>();
 }
 
+/**
+ * Retrieves the user associated with the request's valid, unexpired session.
+ *
+ * @returns The session user, or `null` when no valid session exists or the lookup fails.
+ */
 export async function getSessionUser(request: Request, env: AppEnv): Promise<SessionUser | null> {
   const token = cookieValue(request, SESSION_COOKIE);
   if (!token) return null;
@@ -125,6 +130,12 @@ export async function getSessionUser(request: Request, env: AppEnv): Promise<Ses
   }
 }
 
+/**
+ * Creates a session for a user and returns its session cookie.
+ *
+ * @param userId - The ID of the user associated with the session
+ * @returns A session cookie containing the session token
+ */
 export async function createSession(env: AppEnv, userId: string) {
   const token = randomToken();
   const idHash = await sha256(token);
