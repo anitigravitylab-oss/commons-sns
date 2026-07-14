@@ -229,7 +229,7 @@ const mobileNavItems = [
 
 function UserAvatar({ user, small = false }: { user: Pick<SessionUser, "displayName" | "handle">; small?: boolean }) {
   return (
-    <div className={`avatar ${avatarClass(user.handle)}${small ? " small" : ""}`}>{user.displayName.slice(0, 1)}</div>
+    <div className={`avatar ${avatarClass(user.handle)}${small ? " small" : ""}`}>{sliceCodePoints(user.displayName, 1)}</div>
   );
 }
 
@@ -468,7 +468,7 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
   const deleteFetcher = useFetcher<ActionResult>();
   return (
     <article className="post">
-      <div className={`avatar ${avatarClass(post.handle)}`}>{post.name.slice(0, 1)}</div>
+      <div className={`avatar ${avatarClass(post.handle)}`}>{sliceCodePoints(post.name, 1)}</div>
       <div className="post-content">
         <header>
           <div className="post-identity">
@@ -614,7 +614,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             className={`mobile-avatar avatar ${user ? avatarClass(user.handle) : "avatar-dark"}`}
             onClick={() => (user ? undefined : requireLogin())}
           >
-            {user?.displayName.slice(0, 1) ?? "?"}
+            {user ? sliceCodePoints(user.displayName, 1) : "?"}
           </button>
         </header>
         <div className="topic-strip">

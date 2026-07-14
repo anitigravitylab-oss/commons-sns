@@ -7,7 +7,7 @@ import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
-import { countCodePoints, sanitizeText } from "../lib/text";
+import { countCodePoints, sanitizeText, sliceCodePoints } from "../lib/text";
 import {
   getUserProfileByHandle,
   ProfileValidationError,
@@ -120,7 +120,7 @@ function ProfilePost({ post }: { post: TimelinePost }) {
         borderBottom: "1px solid #e7e9ed",
       }}
     >
-      <div className={`avatar ${avatarClass(post.handle)}`}>{post.name.slice(0, 1)}</div>
+      <div className={`avatar ${avatarClass(post.handle)}`}>{sliceCodePoints(post.name, 1)}</div>
       <div style={{ minWidth: 0 }}>
         <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
         <p style={{ margin: "8px 0 13px", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
@@ -178,7 +178,7 @@ function ProfileEditModal({
   const bioOver = bioCount > BIO_MAX_LENGTH;
   const isSaving = fetcher.state !== "idle";
   const canSave = !isSaving && !nameEmpty && !nameOver && !bioOver;
-  const previewInitial = (displayName.trim() || profile.handle).slice(0, 1);
+  const previewInitial = sliceCodePoints(displayName.trim() || profile.handle, 1);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -339,7 +339,7 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
               className={`avatar ${avatarClass(profile.handle)}`}
               style={{ width: 88, height: 88, fontSize: 32, border: "4px solid white" }}
             >
-              {profile.displayName.slice(0, 1)}
+              {sliceCodePoints(profile.displayName, 1)}
             </div>
             {isOwner ? (
               <button type="button" className="profile-edit-button" onClick={() => setEditing(true)}>

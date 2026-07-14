@@ -5,6 +5,7 @@ import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getBookmarkedPosts, type TimelinePost } from "../lib/posts.server";
+import { sliceCodePoints } from "../lib/text";
 
 type ActionResult = { ok?: boolean; error?: string };
 
@@ -68,7 +69,7 @@ function BookmarkCard({ post }: { post: TimelinePost }) {
         background: "white",
       }}
     >
-      <div className={`avatar ${avatarClass(post.handle)}`}>{post.name.slice(0, 1)}</div>
+      <div className={`avatar ${avatarClass(post.handle)}`}>{sliceCodePoints(post.name, 1)}</div>
       <div style={{ minWidth: 0 }}>
         <header style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
