@@ -7,7 +7,7 @@ import { getSessionUser } from "../lib/auth.server";
 import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
-import { countCodePoints } from "../lib/text";
+import { countCodePoints, sanitizeText } from "../lib/text";
 import {
   getUserProfileByHandle,
   ProfileValidationError,
@@ -163,9 +163,11 @@ function ProfileEditModal({
     if (saved) onSaved();
   }, [saved, onSaved]);
 
-  const nameCount = countCodePoints(displayName);
-  const bioCount = countCodePoints(bio);
-  const nameEmpty = countCodePoints(displayName.trim()) < DISPLAY_NAME_MIN_LENGTH;
+  const sanitizedName = sanitizeText(displayName);
+  const sanitizedBio = sanitizeText(bio, { multiline: true });
+  const nameCount = countCodePoints(sanitizedName);
+  const bioCount = countCodePoints(sanitizedBio);
+  const nameEmpty = countCodePoints(sanitizedName) < DISPLAY_NAME_MIN_LENGTH;
   const nameOver = nameCount > DISPLAY_NAME_MAX_LENGTH;
   const bioOver = bioCount > BIO_MAX_LENGTH;
   const isSaving = fetcher.state !== "idle";
