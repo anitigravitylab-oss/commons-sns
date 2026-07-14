@@ -229,7 +229,9 @@ const mobileNavItems = [
 
 function UserAvatar({ user, small = false }: { user: Pick<SessionUser, "displayName" | "handle">; small?: boolean }) {
   return (
-    <div className={`avatar ${avatarClass(user.handle)}${small ? " small" : ""}`}>{sliceCodePoints(user.displayName, 1)}</div>
+    <div className={`avatar ${avatarClass(user.handle)}${small ? " small" : ""}`}>
+      {sliceCodePoints(user.displayName, 1)}
+    </div>
   );
 }
 
