@@ -1,16 +1,19 @@
-import { CalendarDays, Check, UserRound } from "lucide-react";
+import { CalendarDays, Check, Settings, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { data, Link, redirect, useFetcher } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
-import { avatarClass, normalizeDate, PostIdentity, PostReactionCounts } from "../lib/post-presentation";
+import { normalizeDate, PostSummaryCard, UserAvatar } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
-import { countCodePoints, sanitizeText, sliceCodePoints } from "../lib/text";
+import { SubpageShell } from "../lib/subpage";
+import { countCodePoints, sanitizeText } from "../lib/text";
 import {
   getUserProfileByHandle,
+  isFollowing,
   ProfileValidationError,
+  toggleFollow,
   updateUserProfile,
   type UserProfile,
 } from "../lib/users.server";
@@ -23,28 +26,38 @@ export function meta() {
 
 const PROFILE_PAGE_SIZE = 20;
 
-export async function loader({ request, context, params }: Route.LoaderArgs) {
-  const { env } = context.get(cloudflareContext);
-  const handle = String(params.handle ?? "")
+function handleFromParams(params: Route.LoaderArgs["params"]) {
+  return String(params.handle ?? "")
     .trim()
     .replace(/^@/, "");
-  const profile = await getUserProfileByHandle(env, handle);
+}
+
+export async function loader({ request, context, params }: Route.LoaderArgs) {
+  const { env } = context.get(cloudflareContext);
+  const [profile, user] = await Promise.all([
+    getUserProfileByHandle(env, handleFromParams(params)),
+    getSessionUser(request, env),
+  ]);
   if (!profile) throw data(null, { status: 404 });
 
-  const user = await getSessionUser(request, env);
   const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
   const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
 
   let posts: TimelinePost[] = [];
   let hasNextPage = false;
   let postsError = false;
+  let viewerFollows = false;
   try {
-    const fetchedPosts = await getUserPosts(env, profile.id, user?.id ?? null, {
-      limit: PROFILE_PAGE_SIZE + 1,
-      offset: (page - 1) * PROFILE_PAGE_SIZE,
-    });
+    const [fetchedPosts, following] = await Promise.all([
+      getUserPosts(env, profile.id, user?.id ?? null, {
+        limit: PROFILE_PAGE_SIZE + 1,
+        offset: (page - 1) * PROFILE_PAGE_SIZE,
+      }),
+      user && user.id !== profile.id ? isFollowing(env, user.id, profile.id) : false,
+    ]);
     posts = fetchedPosts.slice(0, PROFILE_PAGE_SIZE);
     hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE;
+    viewerFollows = following;
   } catch (error) {
     console.error("Failed to load profile posts", error);
     postsError = true;
@@ -57,78 +70,103 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
     page,
     hasNextPage,
     postsError,
+    viewerFollows,
   };
 }
 
 /**
- * Processes authenticated profile updates for the profile identified by the route handle.
+ * Processes authenticated profile actions (edit, follow) for the profile
+ * identified by the route handle.
  *
- * @returns A redirect for unauthenticated requests, an error response for invalid or unauthorized requests, or `{ ok: true }` after a successful update.
+ * @returns A redirect for unauthenticated requests, an error response for invalid or unauthorized requests, or `{ ok: true }` on success.
  * @throws A 404 response when the profile handle does not identify an existing profile.
  */
 export async function action({ request, context, params }: Route.ActionArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
-  if (!user) return redirect("/");
+  if (!user) return redirect("/?auth=login");
 
-  const handle = String(params.handle ?? "")
-    .trim()
-    .replace(/^@/, "");
-  const profile = await getUserProfileByHandle(env, handle);
+  const profile = await getUserProfileByHandle(env, handleFromParams(params));
   if (!profile) throw data(null, { status: 404 });
-  if (profile.id !== user.id) {
-    return data<ActionResult>({ error: "このプロフィールは編集できません。" }, { status: 403 });
-  }
 
-  const formData = await request.formData();
-  if (String(formData.get("intent") ?? "") !== "updateProfile") {
-    return data<ActionResult>({ error: "不正な操作です。" }, { status: 400 });
-  }
-
-  const displayName = String(formData.get("displayName") ?? "");
-  const bio = String(formData.get("bio") ?? "");
-
+  let formData: FormData;
   try {
-    await updateUserProfile(env, user.id, { displayName, bio });
+    formData = await request.formData();
   } catch (error) {
-    if (error instanceof ProfileValidationError) {
-      const message =
-        error.code === "displayNameLength"
-          ? `表示名は${DISPLAY_NAME_MIN_LENGTH}〜${DISPLAY_NAME_MAX_LENGTH}文字で入力してください。`
-          : `自己紹介は${BIO_MAX_LENGTH}文字以内で入力してください。`;
-      return data<ActionResult>({ error: message }, { status: 400 });
+    console.error("profile action formData failed", error);
+    return data<ActionResult>({ error: "問題が発生しました。時間をおいてもう一度お試しください。" }, { status: 500 });
+  }
+  const intent = String(formData.get("intent") ?? "");
+
+  if (intent === "toggleFollow") {
+    if (profile.id === user.id) {
+      return data<ActionResult>({ error: "自分をフォローすることはできません。" }, { status: 400 });
     }
-    console.error("Failed to update profile", error);
-    return data<ActionResult>({ error: "プロフィールを更新できませんでした。" }, { status: 500 });
+    try {
+      await toggleFollow(env, user.id, profile.id);
+    } catch (error) {
+      console.error("Failed to toggle follow", error);
+      return data<ActionResult>({ error: "フォロー状態を変更できませんでした。" }, { status: 500 });
+    }
+    return data<ActionResult>({ ok: true });
   }
 
-  return data<ActionResult>({ ok: true });
+  if (intent === "updateProfile") {
+    if (profile.id !== user.id) {
+      return data<ActionResult>({ error: "このプロフィールは編集できません。" }, { status: 403 });
+    }
+
+    const displayName = String(formData.get("displayName") ?? "");
+    const bio = String(formData.get("bio") ?? "");
+
+    try {
+      await updateUserProfile(env, user.id, { displayName, bio });
+    } catch (error) {
+      if (error instanceof ProfileValidationError) {
+        const message =
+          error.code === "displayNameLength"
+            ? `表示名は${DISPLAY_NAME_MIN_LENGTH}〜${DISPLAY_NAME_MAX_LENGTH}文字で入力してください。`
+            : `自己紹介は${BIO_MAX_LENGTH}文字以内で入力してください。`;
+        return data<ActionResult>({ error: message }, { status: 400 });
+      }
+      console.error("Failed to update profile", error);
+      return data<ActionResult>({ error: "プロフィールを更新できませんでした。" }, { status: 500 });
+    }
+
+    return data<ActionResult>({ ok: true });
+  }
+
+  return data<ActionResult>({ error: "不正な操作です。" }, { status: 400 });
 }
 
 function joinedAt(value: string) {
   return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long" }).format(new Date(normalizeDate(value)));
 }
 
-function ProfilePost({ post }: { post: TimelinePost }) {
+function FollowButton({ following }: { following: boolean }) {
+  const fetcher = useFetcher<ActionResult>();
+  // Optimistic: show the toggled state while the submission is in flight.
+  const pending = fetcher.state !== "idle";
+  const shownFollowing = pending ? !following : following;
+
   return (
-    <article
-      style={{
-        display: "grid",
-        gridTemplateColumns: "42px minmax(0, 1fr)",
-        gap: 12,
-        padding: "18px",
-        borderBottom: "1px solid #e7e9ed",
-      }}
-    >
-      <div className={`avatar ${avatarClass(post.handle)}`}>{sliceCodePoints(post.name, 1)}</div>
-      <div style={{ minWidth: 0 }}>
-        <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
-        <p style={{ margin: "8px 0 13px", lineHeight: 1.65, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-          {post.body}
-        </p>
-        <PostReactionCounts replies={post.replies} reposts={post.reposts} likes={post.likes} />
-      </div>
-    </article>
+    <div className="follow-control">
+      <fetcher.Form method="post">
+        <input type="hidden" name="intent" value="toggleFollow" />
+        <button
+          type="submit"
+          disabled={pending}
+          className={shownFollowing ? "follow-button following" : "follow-button"}
+        >
+          {shownFollowing ? "フォロー中" : "フォローする"}
+        </button>
+      </fetcher.Form>
+      {fetcher.data?.error && (
+        <div role="alert" className="inline-error">
+          {fetcher.data.error}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -173,12 +211,11 @@ function ProfileEditModal({
   const sanitizedBio = sanitizeText(bio, { multiline: true });
   const nameCount = countCodePoints(sanitizedName);
   const bioCount = countCodePoints(sanitizedBio);
-  const nameEmpty = countCodePoints(sanitizedName) < DISPLAY_NAME_MIN_LENGTH;
+  const nameEmpty = nameCount < DISPLAY_NAME_MIN_LENGTH;
   const nameOver = nameCount > DISPLAY_NAME_MAX_LENGTH;
   const bioOver = bioCount > BIO_MAX_LENGTH;
   const isSaving = fetcher.state !== "idle";
   const canSave = !isSaving && !nameEmpty && !nameOver && !bioOver;
-  const previewInitial = sliceCodePoints(displayName.trim() || profile.handle, 1);
 
   return (
     <div className="modal-backdrop" role="presentation">
@@ -204,9 +241,7 @@ function ProfileEditModal({
           <button type="button" className="modal-close" onClick={onClose} aria-label="閉じる">
             ×
           </button>
-          <div className={`avatar ${avatarClass(profile.handle)} pe-avatar`} aria-hidden="true">
-            {previewInitial}
-          </div>
+          <UserAvatar name={displayName.trim() || profile.handle} handle={profile.handle} className="pe-avatar" />
         </div>
 
         <div className="pe-body">
@@ -287,7 +322,7 @@ function ProfileEditModal({
 }
 
 export default function ProfilePage({ loaderData }: Route.ComponentProps) {
-  const { user, profile, posts, page, hasNextPage, postsError } = loaderData;
+  const { user, profile, posts, page, hasNextPage, postsError, viewerFollows } = loaderData;
   const isOwner = user?.id === profile.id;
   const [editing, setEditing] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
@@ -304,124 +339,76 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
   }, []);
 
   return (
-    <main style={{ minHeight: "100vh", background: "#f7f8fa" }}>
-      <section
-        style={{
-          width: "min(100%, 680px)",
-          minHeight: "100vh",
-          margin: "0 auto",
-          borderInline: "1px solid #e7e9ed",
-          background: "white",
-        }}
+    <>
+      <SubpageShell
+        heading={
+          <>
+            <h1>{profile.displayName}</h1>
+            <p className="subpage-subtitle">{profile.postCount}件の投稿</p>
+          </>
+        }
       >
-        <header
-          style={{
-            position: "sticky",
-            top: 0,
-            zIndex: 20,
-            padding: "14px 18px",
-            borderBottom: "1px solid #e7e9ed",
-            background: "rgba(255,255,255,0.94)",
-            backdropFilter: "blur(16px)",
-          }}
-        >
-          <Link to="/" style={{ color: "#2867e8", fontSize: 13, fontWeight: 700 }}>
-            ← タイムラインへ戻る
-          </Link>
-          <h1 style={{ margin: "10px 0 0", fontSize: 20 }}>{profile.displayName}</h1>
-          <span style={{ color: "#69717d", fontSize: 12 }}>{profile.postCount}件の投稿</span>
-        </header>
-
-        <div style={{ height: 150, background: "linear-gradient(135deg, #dce9ff, #f2e9ff)" }} />
-        <section style={{ padding: "0 20px 22px", borderBottom: "1px solid #e7e9ed" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginTop: -44 }}>
-            <div
-              className={`avatar ${avatarClass(profile.handle)}`}
-              style={{ width: 88, height: 88, fontSize: 32, border: "4px solid white" }}
-            >
-              {sliceCodePoints(profile.displayName, 1)}
-            </div>
+        <div className="profile-banner" />
+        <section className="profile-summary">
+          <div className="profile-summary-top">
+            <UserAvatar name={profile.displayName} handle={profile.handle} className="profile-avatar" />
             {isOwner ? (
-              <button type="button" className="profile-edit-button" onClick={() => setEditing(true)}>
-                プロフィールを編集
-              </button>
+              <div className="profile-actions">
+                <Link to="/settings" className="profile-edit-button" aria-label="アカウント設定">
+                  <Settings size={16} aria-hidden={true} /> 設定
+                </Link>
+                <button type="button" className="profile-edit-button" onClick={() => setEditing(true)}>
+                  プロフィールを編集
+                </button>
+              </div>
+            ) : user ? (
+              <FollowButton key={String(viewerFollows)} following={viewerFollows} />
             ) : (
-              <button
-                type="button"
-                disabled
-                title="フォロー機能は次の実装予定です"
-                style={{
-                  border: "1px solid #d8dce3",
-                  borderRadius: 999,
-                  padding: "9px 16px",
-                  background: "white",
-                  fontWeight: 700,
-                  color: "#8b929d",
-                }}
-              >
-                フォロー準備中
-              </button>
+              <Link to="/?auth=login" className="follow-button">
+                フォローする
+              </Link>
             )}
           </div>
 
-          <h2 style={{ margin: "14px 0 2px", fontSize: 24 }}>{profile.displayName}</h2>
-          <p style={{ margin: 0, color: "#69717d" }}>@{profile.handle}</p>
-          <p style={{ margin: "16px 0", lineHeight: 1.65, whiteSpace: "pre-wrap" }}>
-            {profile.bio || "自己紹介はまだありません。"}
-          </p>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, color: "#69717d", fontSize: 13 }}>
-            <CalendarDays size={16} /> {joinedAt(profile.createdAt)}からCommonsを利用
+          <h2 className="profile-name">{profile.displayName}</h2>
+          <p className="profile-handle">@{profile.handle}</p>
+          <p className="profile-bio">{profile.bio || "自己紹介はまだありません。"}</p>
+          <div className="profile-meta">
+            <CalendarDays size={16} aria-hidden={true} /> {joinedAt(profile.createdAt)}からCommonsを利用
           </div>
-          <div style={{ display: "flex", gap: 18, marginTop: 14, fontSize: 14 }}>
+          <div className="profile-follow-stats">
             <span>
-              <strong>{profile.followingCount}</strong> <span style={{ color: "#69717d" }}>フォロー中</span>
+              <strong>{profile.followingCount}</strong> <span>フォロー中</span>
             </span>
             <span>
-              <strong>{profile.followerCount}</strong> <span style={{ color: "#69717d" }}>フォロワー</span>
+              <strong>{profile.followerCount}</strong> <span>フォロワー</span>
             </span>
           </div>
         </section>
 
-        <div style={{ padding: "14px 18px", borderBottom: "1px solid #e7e9ed", fontWeight: 800 }}>投稿</div>
+        <div className="section-heading">投稿</div>
         {postsError ? (
-          <div className="form-error" role="alert" style={{ margin: 18 }}>
+          <div className="form-error subpage-alert" role="alert">
             投稿を読み込めませんでした。時間をおいて再読み込みしてください。
           </div>
         ) : posts.length > 0 ? (
           <>
             {posts.map((post) => (
-              <ProfilePost key={post.id} post={post} />
+              <PostSummaryCard key={post.id} post={post} />
             ))}
-            <nav
-              aria-label="プロフィール投稿のページ移動"
-              style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "18px" }}
-            >
-              {page > 1 ? (
-                <Link to={`?page=${page - 1}`} style={{ color: "#2867e8", fontWeight: 700 }}>
-                  ← 新しい投稿
-                </Link>
-              ) : (
-                <span />
-              )}
-              {hasNextPage && (
-                <Link to={`?page=${page + 1}`} style={{ color: "#2867e8", fontWeight: 700 }}>
-                  過去の投稿 →
-                </Link>
-              )}
+            <nav aria-label="プロフィール投稿のページ移動" className="pager">
+              {page > 1 ? <Link to={`?page=${page - 1}`}>← 新しい投稿</Link> : <span />}
+              {hasNextPage && <Link to={`?page=${page + 1}`}>過去の投稿 →</Link>}
             </nav>
           </>
         ) : (
-          <div className="empty-state" style={{ minHeight: 260 }}>
+          <div className="empty-state tall">
             <UserRound size={30} />
             <strong>{page > 1 ? "このページには投稿がありません" : "公開投稿はまだありません"}</strong>
-            {page > 1 && (
-              <Link to="?page=1" style={{ color: "#2867e8", fontWeight: 700 }}>
-                最初のページへ戻る
-              </Link>
-            )}
+            {page > 1 && <Link to="?page=1">最初のページへ戻る</Link>}
           </div>
         )}
-      </section>
+      </SubpageShell>
 
       {isOwner && editing && (
         <ProfileEditModal profile={profile} onClose={() => setEditing(false)} onSaved={handleSaved} />
@@ -432,6 +419,6 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
           <Check size={16} aria-hidden="true" /> プロフィールを更新しました
         </output>
       )}
-    </main>
+    </>
   );
 }

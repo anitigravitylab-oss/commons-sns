@@ -1,6 +1,6 @@
 import type { AppEnv } from "../cloudflare";
 
-const SESSION_COOKIE = "commons_session";
+export const SESSION_COOKIE = "commons_session";
 const SESSION_DAYS = 30;
 // Cloudflare Workers rejects PBKDF2 iteration counts above 100,000.
 const PBKDF2_ITERATIONS = 100_000;
@@ -59,7 +59,15 @@ function cookieValue(request: Request, name: string) {
   const cookie = request.headers.get("Cookie") ?? "";
   for (const item of cookie.split(";")) {
     const [key, ...value] = item.trim().split("=");
-    if (key === name) return decodeURIComponent(value.join("="));
+    if (key !== name) continue;
+    const raw = value.join("=");
+    // A malformed percent-encoding must not take the whole request down;
+    // an undecodable token simply fails the session lookup.
+    try {
+      return decodeURIComponent(raw);
+    } catch {
+      return raw;
+    }
   }
   return null;
 }
@@ -134,9 +142,10 @@ export async function getSessionUser(request: Request, env: AppEnv): Promise<Ses
  * Creates a session for a user and returns its session cookie.
  *
  * @param userId - The ID of the user associated with the session
+ * @param ctx - When provided, expired sessions are purged after the response is sent
  * @returns A session cookie containing the session token
  */
-export async function createSession(env: AppEnv, userId: string) {
+export async function createSession(env: AppEnv, userId: string, ctx?: ExecutionContext) {
   const token = randomToken();
   const idHash = await sha256(token);
   const expires = new Date(Date.now() + SESSION_DAYS * 86_400_000).toISOString();
@@ -146,6 +155,11 @@ export async function createSession(env: AppEnv, userId: string) {
   await env.DB.prepare("INSERT INTO sessions (id_hash, user_id, expires_at) VALUES (?, ?, ?)")
     .bind(idHash, userId, expires)
     .run();
+  ctx?.waitUntil(
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at <= datetime('now')")
+      .run()
+      .catch((error) => console.error("expired session cleanup failed", error)),
+  );
   return sessionCookie(token, SESSION_DAYS * 86_400);
 }
 
@@ -156,6 +170,24 @@ export async function destroySession(request: Request, env: AppEnv) {
       .bind(await sha256(token))
       .run();
   return clearSessionCookie();
+}
+
+/**
+ * Sets a new password for the user and revokes every other session.
+ *
+ * The session attached to the current request survives so the user stays
+ * logged in on this device; all other devices must log in again.
+ */
+export async function changePassword(request: Request, env: AppEnv, userId: string, newPassword: string) {
+  const { hash, salt } = await hashPassword(newPassword);
+  const token = cookieValue(request, SESSION_COOKIE);
+  const currentIdHash = token ? await sha256(token) : null;
+  await env.DB.batch([
+    env.DB.prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?").bind(hash, salt, userId),
+    currentIdHash
+      ? env.DB.prepare("DELETE FROM sessions WHERE user_id = ? AND id_hash <> ?").bind(userId, currentIdHash)
+      : env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(userId),
+  ]);
 }
 
 const DUMMY_SALT = "00000000000000000000000000000000";

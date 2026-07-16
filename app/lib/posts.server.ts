@@ -86,15 +86,36 @@ async function hydratePosts(env: AppEnv, rows: PostRow[], viewerId: string | nul
   }));
 }
 
-export async function getTimeline(env: AppEnv, viewerId: string | null): Promise<TimelinePost[]> {
-  const result = await env.DB.prepare(
-    `SELECT ${POST_SELECT_SQL}
-     FROM posts p
-     JOIN users u ON u.id = p.author_id
-     WHERE p.deleted_at IS NULL AND p.visibility = 'public'
-     ORDER BY p.created_at DESC
-     LIMIT 50`,
-  ).all<PostRow>();
+export type TimelineScope = "recommended" | "following";
+
+export async function getTimeline(
+  env: AppEnv,
+  viewerId: string | null,
+  scope: TimelineScope = "recommended",
+): Promise<TimelinePost[]> {
+  if (scope === "following" && !viewerId) return [];
+
+  const statement =
+    scope === "following"
+      ? env.DB.prepare(
+          `SELECT ${POST_SELECT_SQL}
+           FROM posts p
+           JOIN users u ON u.id = p.author_id
+           WHERE p.deleted_at IS NULL
+             AND p.visibility = 'public'
+             AND (p.author_id = ? OR p.author_id IN (SELECT following_id FROM follows WHERE follower_id = ?))
+           ORDER BY p.created_at DESC, p.id DESC
+           LIMIT 50`,
+        ).bind(viewerId, viewerId)
+      : env.DB.prepare(
+          `SELECT ${POST_SELECT_SQL}
+           FROM posts p
+           JOIN users u ON u.id = p.author_id
+           WHERE p.deleted_at IS NULL AND p.visibility = 'public'
+           ORDER BY p.created_at DESC, p.id DESC
+           LIMIT 50`,
+        );
+  const result = await statement.all<PostRow>();
 
   return hydratePosts(env, result.results ?? [], viewerId);
 }
@@ -109,7 +130,7 @@ export async function getBookmarkedPosts(env: AppEnv, userId: string): Promise<T
        AND bookmark.kind = 'bookmark'
        AND p.deleted_at IS NULL
        AND p.visibility = 'public'
-     ORDER BY bookmark.created_at DESC
+     ORDER BY bookmark.created_at DESC, p.id DESC
      LIMIT 100`,
   )
     .bind(userId)

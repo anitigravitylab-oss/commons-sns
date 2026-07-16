@@ -6,7 +6,7 @@ import { getSessionUser } from "../lib/auth.server";
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
-  if (!user) return redirect("/");
+  if (!user) return redirect("/?auth=login");
   return redirect(`/users/${encodeURIComponent(user.handle)}`);
 }
 

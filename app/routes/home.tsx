@@ -19,9 +19,10 @@ import {
   Trash2,
   UserRound,
   UsersRound,
+  type LucideIcon,
 } from "lucide-react";
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
-import { data, Form, redirect, useFetcher, useNavigate } from "react-router";
+import { data, Form, Link, redirect, useFetcher, useNavigate, useSearchParams } from "react-router";
 import type { Route } from "./+types/home";
 import { cloudflareContext, type AppEnv } from "../cloudflare";
 import {
@@ -33,9 +34,9 @@ import {
   verifyPasswordOrDummy,
 } from "../lib/auth.server";
 import type { SessionUser } from "../lib/auth.server";
-import { avatarClass, normalizeDate, timeAgo } from "../lib/post-presentation";
+import { avatarClass, PostIdentity, UserAvatar } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
-import type { TimelinePost } from "../lib/posts.server";
+import type { TimelinePost, TimelineScope } from "../lib/posts.server";
 import { countCodePoints, isReservedHandle, sanitizeText, sliceCodePoints } from "../lib/text";
 
 type ActionResult = {
@@ -46,6 +47,9 @@ type ActionResult = {
 
 type ActionFetcher = ReturnType<typeof useFetcher<ActionResult>>;
 
+const POST_MAX_LENGTH = 280;
+const PROJECT_REPO_URL = "https://github.com/anitigravitylab-oss/commons-sns";
+
 export function meta() {
   return [
     { title: "Commons — みんなで育てるSNS" },
@@ -54,18 +58,16 @@ export function meta() {
 }
 
 export async function loader({ request, context }: Route.LoaderArgs) {
-  const env = envFrom(context);
+  const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
+  const requestedTab = new URL(request.url).searchParams.get("tab");
+  const tab: TimelineScope = requestedTab === "following" && user ? "following" : "recommended";
   try {
-    return { user, posts: await getTimeline(env, user?.id ?? null), timelineError: false };
+    return { user, tab, posts: await getTimeline(env, user?.id ?? null, tab), timelineError: false };
   } catch (error) {
     console.error("getTimeline failed", error);
-    return { user, posts: [] as TimelinePost[], timelineError: true };
+    return { user, tab, posts: [] as TimelinePost[], timelineError: true };
   }
-}
-
-function envFrom(context: Route.LoaderArgs["context"]) {
-  return context.get(cloudflareContext).env;
 }
 
 function formText(formData: FormData, key: string) {
@@ -78,7 +80,7 @@ const fail = (error: string, status: number, form?: ActionResult["form"]) =>
 const ok = () => data<ActionResult>({ ok: true });
 
 export async function action({ request, context }: Route.ActionArgs) {
-  const env = envFrom(context);
+  const { env, ctx } = context.get(cloudflareContext);
   let formData: FormData;
   try {
     formData = await request.formData();
@@ -87,27 +89,28 @@ export async function action({ request, context }: Route.ActionArgs) {
     return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
   }
   const intent = formText(formData, "intent");
-
-  if (intent === "signup") return handleSignup(env, formData);
-  if (intent === "login") return handleLogin(env, formData);
-  if (intent === "logout") return handleLogout(env, request);
-
-  const user = await getSessionUser(request, env);
-  if (!user) return fail("この操作にはログインが必要です。", 401, "login");
+  const authForm = intent === "signup" ? "signup" : intent === "login" ? "login" : undefined;
 
   try {
+    if (intent === "signup") return await handleSignup(env, ctx, formData);
+    if (intent === "login") return await handleLogin(env, ctx, formData);
+    if (intent === "logout") return await handleLogout(env, request);
+
+    const user = await getSessionUser(request, env);
+    if (!user) return fail("この操作にはログインが必要です。", 401, "login");
+
     if (intent === "createPost") return await handleCreatePost(env, formData, user);
     if (intent === "toggleReaction") return await handleToggleReaction(env, formData, user);
     if (intent === "deletePost") return await handleDeletePost(env, formData, user);
   } catch (error) {
     console.error("action handler failed", error);
-    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
+    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500, authForm);
   }
 
   return fail("不明な操作です。", 400);
 }
 
-async function handleSignup(env: AppEnv, formData: FormData) {
+async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const displayName = sanitizeText(formText(formData, "displayName"));
   const password = String(formData.get("password") ?? "");
@@ -141,10 +144,10 @@ async function handleSignup(env: AppEnv, formData: FormData) {
     console.error("handleSignup insert failed", error);
     return fail("登録できませんでした。時間をおいてもう一度お試しください。", 500, "signup");
   }
-  return redirect("/", { headers: { "Set-Cookie": await createSession(env, userId) } });
+  return redirect("/", { headers: { "Set-Cookie": await createSession(env, userId, ctx) } });
 }
 
-async function handleLogin(env: AppEnv, formData: FormData) {
+async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
   if (password.length < 8 || password.length > 128) {
@@ -155,7 +158,7 @@ async function handleLogin(env: AppEnv, formData: FormData) {
   if (!user || !verified) {
     return fail("IDまたはパスワードが違います。", 401, "login");
   }
-  return redirect("/", { headers: { "Set-Cookie": await createSession(env, user.id) } });
+  return redirect("/", { headers: { "Set-Cookie": await createSession(env, user.id, ctx) } });
 }
 
 async function handleLogout(env: AppEnv, request: Request) {
@@ -164,7 +167,9 @@ async function handleLogout(env: AppEnv, request: Request) {
 
 async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUser) {
   const clean = sanitizeText(formText(formData, "body"), { multiline: true });
-  if (!clean || countCodePoints(clean, 280) > 280) return fail("投稿は1〜280文字で入力してください。", 400);
+  if (!clean || countCodePoints(clean, POST_MAX_LENGTH) > POST_MAX_LENGTH) {
+    return fail(`投稿は1〜${POST_MAX_LENGTH}文字で入力してください。`, 400);
+  }
   await env.DB.prepare("INSERT INTO posts (id, author_id, body, visibility) VALUES (?, ?, ?, 'public')")
     .bind(crypto.randomUUID(), user.id, clean)
     .run();
@@ -177,16 +182,12 @@ async function handleToggleReaction(env: AppEnv, formData: FormData, user: Sessi
   if (!postId || !["like", "repost", "bookmark"].includes(kind)) {
     return fail("不正な操作です。", 400);
   }
-  const exists = await env.DB.prepare(
-    "SELECT 1 AS present FROM post_reactions WHERE user_id = ? AND post_id = ? AND kind = ?",
-  )
+  // Delete first and only insert when nothing was removed: one round trip per
+  // toggle, and concurrent toggles cannot double-insert thanks to ON CONFLICT.
+  const deleted = await env.DB.prepare("DELETE FROM post_reactions WHERE user_id = ? AND post_id = ? AND kind = ?")
     .bind(user.id, postId, kind)
-    .first<{ present: number }>();
-  if (exists) {
-    await env.DB.prepare("DELETE FROM post_reactions WHERE user_id = ? AND post_id = ? AND kind = ?")
-      .bind(user.id, postId, kind)
-      .run();
-  } else {
+    .run();
+  if ((deleted.meta.changes ?? 0) === 0) {
     await env.DB.prepare(
       `INSERT INTO post_reactions (user_id, post_id, kind)
        SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM posts WHERE id = ? AND deleted_at IS NULL)
@@ -208,32 +209,31 @@ async function handleDeletePost(env: AppEnv, formData: FormData, user: SessionUs
   return ok();
 }
 
-const navItems = [
-  { label: "ホーム", icon: Home },
+type NavEntry = {
+  label: string;
+  icon: LucideIcon;
+  to?: string;
+  requiresAuth?: boolean;
+};
+
+const navItems: NavEntry[] = [
+  { label: "ホーム", icon: Home, to: "/" },
   { label: "見つける", icon: Search },
   { label: "通知", icon: Bell },
   { label: "メッセージ", icon: Mail },
-  { label: "ブックマーク", icon: Bookmark },
+  { label: "ブックマーク", icon: Bookmark, to: "/bookmarks", requiresAuth: true },
   { label: "コミュニティ", icon: UsersRound },
-  { label: "プロフィール", icon: UserRound },
-  { label: "設定", icon: Settings },
+  { label: "プロフィール", icon: UserRound, to: "/profile", requiresAuth: true },
+  { label: "設定", icon: Settings, to: "/settings", requiresAuth: true },
 ];
 
 const mobileNavItems = [
   { id: "home", icon: Home, label: "ホーム" },
   { id: "search", icon: Search, label: "検索" },
   { id: "compose", icon: Feather, label: "投稿する" },
-  { id: "notifications", icon: Bell, label: "通知" },
+  { id: "bookmarks", icon: Bookmark, label: "ブックマーク" },
   { id: "profile", icon: UserRound, label: "プロフィール" },
 ];
-
-function UserAvatar({ user, small = false }: { user: Pick<SessionUser, "displayName" | "handle">; small?: boolean }) {
-  return (
-    <div className={`avatar ${avatarClass(user.handle)}${small ? " small" : ""}`}>
-      {sliceCodePoints(user.displayName, 1)}
-    </div>
-  );
-}
 
 type IntentFormProps = ComponentProps<typeof Form> & {
   intent: string;
@@ -334,7 +334,7 @@ function AuthModal({
           {mode === "signup" && (
             <label>
               表示名
-              <input name="displayName" required autoComplete="name" placeholder="例：あおい" />
+              <input name="displayName" required maxLength={30} autoComplete="name" placeholder="例：あおい" />
             </label>
           )}
           <label>
@@ -389,17 +389,20 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
     );
   }
 
-  const remaining = 280 - countCodePoints(draft);
+  // The draft is never truncated while typing — cutting the value mid-input
+  // breaks IME composition. Overlong drafts just disable submission instead.
+  const remaining = POST_MAX_LENGTH - countCodePoints(draft);
+  const over = remaining < 0;
 
   return (
     <IntentForm fetcher={fetcher} intent="createPost" className="composer">
-      <UserAvatar user={user} />
+      <UserAvatar name={user.displayName} handle={user.handle} />
       <div className="composer-main">
         <textarea
           id="composer"
           name="body"
           value={draft}
-          onChange={(event) => setDraft(sliceCodePoints(event.target.value, 280))}
+          onChange={(event) => setDraft(event.target.value)}
           placeholder="いまどうしてる？"
           rows={2}
         />
@@ -411,8 +414,10 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
             <button type="button">全員に公開</button>
           </div>
           <div className="composer-submit">
-            {draft.length > 0 && <span className={remaining < 20 ? "limit near" : "limit"}>{remaining}</span>}
-            <button type="submit" disabled={!draft.trim() || fetcher.state !== "idle"}>
+            {draft.length > 0 && (
+              <span className={over ? "limit over" : remaining < 20 ? "limit near" : "limit"}>{remaining}</span>
+            )}
+            <button type="submit" disabled={!draft.trim() || over || fetcher.state !== "idle"}>
               {fetcher.state === "idle" ? "投稿する" : "送信中"}
             </button>
           </div>
@@ -437,7 +442,7 @@ function ReactionButton({
 }: PostChildProps & { kind: "like" | "repost" | "bookmark" }) {
   const fetcher = useFetcher<ActionResult>();
   const active = kind === "like" ? post.liked : kind === "repost" ? post.reposted : post.bookmarked;
-  const count = kind === "like" ? post.likes : kind === "repost" ? post.reposts : undefined;
+  const baseCount = kind === "like" ? post.likes : kind === "repost" ? post.reposts : undefined;
   const Icon = kind === "like" ? Heart : kind === "repost" ? Repeat2 : Bookmark;
   const label = kind === "like" ? "いいね" : kind === "repost" ? "リポスト" : "ブックマーク";
   if (!user)
@@ -446,19 +451,26 @@ function ReactionButton({
         <span>
           <Icon size={18} />
         </span>
-        {count !== undefined && <small>{count || ""}</small>}
+        {baseCount !== undefined && <small>{baseCount || ""}</small>}
       </button>
     );
+  // Show the toggled state optimistically while the submission is in flight;
+  // revalidation replaces it with the server truth right after.
+  const pending = fetcher.state !== "idle";
+  const shownActive = pending ? !active : active;
+  const count = baseCount === undefined ? undefined : Math.max(0, baseCount + (pending ? (active ? -1 : 1) : 0));
+  const activeClass = kind === "like" ? "liked" : kind === "repost" ? "reposted" : "bookmarked";
   return (
     <IntentForm fetcher={fetcher} intent="toggleReaction" fields={{ postId: post.id, kind }}>
       <button
         type="submit"
-        disabled={fetcher.state !== "idle"}
-        className={active ? (kind === "like" ? "liked" : kind === "repost" ? "reposted" : "bookmarked") : ""}
+        disabled={pending}
+        className={shownActive ? activeClass : ""}
         aria-label={label}
+        aria-pressed={shownActive}
       >
         <span>
-          <Icon size={18} fill={active && kind !== "repost" ? "currentColor" : "none"} />
+          <Icon size={18} fill={shownActive && kind !== "repost" ? "currentColor" : "none"} />
         </span>
         {count !== undefined && <small>{count || ""}</small>}
       </button>
@@ -470,37 +482,25 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
   const deleteFetcher = useFetcher<ActionResult>();
   return (
     <article className="post">
-      <div className={`avatar ${avatarClass(post.handle)}`}>{sliceCodePoints(post.name, 1)}</div>
+      <UserAvatar name={post.name} handle={post.handle} />
       <div className="post-content">
         <header>
-          <div className="post-identity">
-            <strong>{post.name}</strong>
-            {post.handle === "commons_dev" && (
-              <span className="verified" aria-label="公式">
-                ✓
-              </span>
-            )}
-            <span>@{post.handle}</span>
-            <span>·</span>
-            <time dateTime={normalizeDate(post.createdAt)} suppressHydrationWarning>
-              {timeAgo(post.createdAt)}
-            </time>
-          </div>
+          <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
           {user?.id === post.authorId ? (
             <IntentForm fetcher={deleteFetcher} intent="deletePost" fields={{ postId: post.id }}>
-              <button type="submit" aria-label="削除">
+              <button type="submit" disabled={deleteFetcher.state !== "idle"} aria-label="投稿を削除">
                 <Trash2 size={17} />
               </button>
             </IntentForm>
           ) : (
-            <button aria-label="その他">
+            <button aria-label="その他" title="準備中">
               <MoreHorizontal size={19} />
             </button>
           )}
         </header>
         <p>{post.body}</p>
         <footer className="post-actions">
-          <button onClick={user ? undefined : onRequireLogin} aria-label="返信">
+          <button onClick={user ? undefined : onRequireLogin} aria-label="返信" title="返信機能は準備中です">
             <span>
               <MessageCircle size={18} />
             </span>
@@ -516,30 +516,67 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 }
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
-  const { user, posts, timelineError } = loaderData;
+  const { user, posts, tab, timelineError } = loaderData;
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
-  const [activeNav, setActiveNav] = useState("ホーム");
-  const [activeTab, setActiveTab] = useState<"おすすめ" | "フォロー中">("おすすめ");
-  const [authMode, setAuthMode] = useState<"login" | "signup" | null>(null);
-  const [dismissedAction, setDismissedAction] = useState(false);
-  const visibleAuthMode = authMode ?? (!dismissedAction ? actionData?.form : null) ?? null;
+  const authParam = searchParams.get("auth");
+  const [authMode, setAuthMode] = useState<"login" | "signup" | null>(
+    authParam === "login" || authParam === "signup" ? authParam : null,
+  );
+  const [dismissedError, setDismissedError] = useState(false);
+
+  // A new action response may carry a fresh auth error; let it show again.
+  useEffect(() => {
+    if (actionData) setDismissedError(false);
+  }, [actionData]);
+
+  // Close the auth modal once a login or signup succeeds.
+  const userId = user?.id;
+  useEffect(() => {
+    if (userId) setAuthMode(null);
+  }, [userId]);
+
   const visiblePosts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return posts;
     return posts.filter((post) => `${post.name} ${post.handle} ${post.body}`.toLowerCase().includes(normalized));
   }, [posts, query]);
 
-  const openAuth = (mode: "login" | "signup") => {
-    setDismissedAction(false);
-    setAuthMode(mode);
-  };
+  const openAuth = (mode: "login" | "signup") => setAuthMode(mode);
   const requireLogin = () => openAuth("login");
+  const closeAuth = () => {
+    setAuthMode(null);
+    setDismissedError(true);
+    if (searchParams.has("auth")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("auth");
+      setSearchParams(next, { replace: true, preventScrollReset: true });
+    }
+  };
+  const visibleAuthMode = user ? null : (authMode ?? (dismissedError ? null : (actionData?.form ?? null)));
+
+  const focusComposer = () => document.querySelector<HTMLTextAreaElement>("#composer")?.focus();
+  const emptyState = query
+    ? {
+        icon: Search,
+        title: "投稿が見つかりません",
+        description: "検索は読み込み済みのタイムライン内のみが対象です。別の言葉でお試しください。",
+      }
+    : tab === "following"
+      ? {
+          icon: UsersRound,
+          title: "まだ投稿がありません",
+          description: "ユーザーをフォローすると、その投稿がここに表示されます。",
+        }
+      : { icon: Search, title: "投稿が見つかりません", description: "最初の投稿をしてみましょう。" };
+  const EmptyIcon = emptyState.icon;
+
   return (
     <main className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-inner">
-          <button className="brand" aria-label="Commons ホーム" onClick={() => setActiveNav("ホーム")}>
+          <button className="brand" aria-label="Commons ホーム" onClick={() => navigate("/")}>
             <span className="brand-mark">
               <span />
             </span>
@@ -547,29 +584,44 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             <span className="brand-beta">BETA</span>
           </button>
           <nav className="main-nav" aria-label="メインナビゲーション">
-            {navItems.map(({ label, icon: Icon }) => (
-              <button
-                key={label}
-                className={activeNav === label ? "nav-item active" : "nav-item"}
-                onClick={() => setActiveNav(label)}
-              >
-                <span className="nav-icon-wrap">
-                  <Icon size={23} strokeWidth={activeNav === label ? 2.5 : 1.9} />
-                </span>
-                <span>{label}</span>
-              </button>
-            ))}
+            {navItems.map(({ label, icon: Icon, to, requiresAuth }) => {
+              const isCurrent = to === "/";
+              const content = (
+                <>
+                  <span className="nav-icon-wrap">
+                    <Icon size={23} strokeWidth={isCurrent ? 2.5 : 1.9} />
+                  </span>
+                  <span>{label}</span>
+                </>
+              );
+              if (!to) {
+                return (
+                  <button key={label} className="nav-item" disabled title="準備中">
+                    {content}
+                  </button>
+                );
+              }
+              if (requiresAuth && !user) {
+                return (
+                  <button key={label} className="nav-item" onClick={requireLogin}>
+                    {content}
+                  </button>
+                );
+              }
+              return (
+                <Link key={label} className={isCurrent ? "nav-item active" : "nav-item"} to={to}>
+                  {content}
+                </Link>
+              );
+            })}
           </nav>
-          <button
-            className="post-button"
-            onClick={() => (user ? document.querySelector<HTMLTextAreaElement>("#composer")?.focus() : requireLogin())}
-          >
+          <button className="post-button" onClick={() => (user ? focusComposer() : requireLogin())}>
             <Feather size={19} />
             <span>投稿する</span>
           </button>
           {user ? (
             <div className="account-switcher">
-              <UserAvatar user={user} small />
+              <UserAvatar name={user.displayName} handle={user.handle} className="small" />
               <span className="account-copy">
                 <strong>{user.displayName}</strong>
                 <small>@{user.handle}</small>
@@ -600,21 +652,33 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             </span>
           </div>
           <div className="tabs" role="tablist">
-            {(["おすすめ", "フォロー中"] as const).map((tab) => (
-              <button
-                key={tab}
+            <Link
+              role="tab"
+              aria-selected={tab === "recommended"}
+              className={tab === "recommended" ? "tab active" : "tab"}
+              to="/"
+            >
+              おすすめ
+            </Link>
+            {user ? (
+              <Link
                 role="tab"
-                aria-selected={activeTab === tab}
-                className={activeTab === tab ? "tab active" : "tab"}
-                onClick={() => setActiveTab(tab)}
+                aria-selected={tab === "following"}
+                className={tab === "following" ? "tab active" : "tab"}
+                to="/?tab=following"
               >
-                {tab}
+                フォロー中
+              </Link>
+            ) : (
+              <button role="tab" aria-selected={false} className="tab" onClick={requireLogin}>
+                フォロー中
               </button>
-            ))}
+            )}
           </div>
           <button
             className={`mobile-avatar avatar ${user ? avatarClass(user.handle) : "avatar-dark"}`}
-            onClick={() => (user ? undefined : requireLogin())}
+            onClick={() => (user ? navigate("/profile") : requireLogin())}
+            aria-label={user ? "プロフィール" : "ログイン"}
           >
             {user ? sliceCodePoints(user.displayName, 1) : "?"}
           </button>
@@ -623,12 +687,14 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
           <Sparkles size={15} />
           <span>いま話されていること</span>
           <strong>みんなで決める最初の機能</strong>
-          <button>参加する</button>
+          <a className="topic-action" href={PROJECT_REPO_URL} target="_blank" rel="noreferrer">
+            参加する
+          </a>
         </div>
         <Composer user={user} onRequireLogin={requireLogin} />
         <div className="feed-status">
-          <span aria-live="polite">{activeTab}の投稿</span>
-          <button>新しい順</button>
+          <span aria-live="polite">{tab === "following" ? "フォロー中" : "おすすめ"}の投稿</span>
+          <span>新しい順</span>
         </div>
         {timelineError && (
           <div className="form-error" role="alert">
@@ -638,13 +704,9 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         <div className="posts">
           {visiblePosts.length === 0 && !timelineError ? (
             <div className="empty-state">
-              <Search size={28} />
-              <strong>投稿が見つかりません</strong>
-              <span>
-                {query
-                  ? "検索は読み込み済みのタイムライン内のみが対象です。別の言葉でお試しください。"
-                  : "最初の投稿をしてみましょう。"}
-              </span>
+              <EmptyIcon size={28} />
+              <strong>{emptyState.title}</strong>
+              <span>{emptyState.description}</span>
             </div>
           ) : (
             visiblePosts.map((post) => <PostCard key={post.id} post={post} user={user} onRequireLogin={requireLogin} />)
@@ -683,12 +745,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             </div>
             <h2>このSNSを、一緒につくる。</h2>
             <p>機能提案、デザイン、翻訳、コード。得意な方法で開発に参加できます。</p>
-            <a
-              className="project-link"
-              href="https://github.com/anitigravitylab-oss/commons-sns"
-              target="_blank"
-              rel="noreferrer"
-            >
+            <a className="project-link" href={PROJECT_REPO_URL} target="_blank" rel="noreferrer">
               開発に参加する <span>→</span>
             </a>
           </section>
@@ -711,20 +768,23 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             ))}
           </section>
           <footer className="legal-links">
-            <a href="https://github.com/anitigravitylab-oss/commons-sns">ソースコード</a>
-            <a href="https://github.com/anitigravitylab-oss/commons-sns/blob/main/LICENSE">AGPL-3.0</a>
+            <a href={PROJECT_REPO_URL}>ソースコード</a>
+            <a href={`${PROJECT_REPO_URL}/blob/main/LICENSE`}>AGPL-3.0</a>
             <span>© 2026 Commons</span>
           </footer>
         </div>
       </aside>
       <nav className="mobile-nav" aria-label="モバイルナビゲーション">
         {mobileNavItems.map(({ id, icon: Icon, label }) => {
-          const disabled = id === "search" || id === "notifications";
+          const disabled = id === "search";
           const handleClick = () => {
             if (id === "home") {
               window.scrollTo({ top: 0, behavior: "smooth" });
             } else if (id === "compose") {
-              if (user) document.querySelector<HTMLTextAreaElement>("#composer")?.focus();
+              if (user) focusComposer();
+              else requireLogin();
+            } else if (id === "bookmarks") {
+              if (user) navigate("/bookmarks");
               else requireLogin();
             } else if (id === "profile") {
               if (user) navigate("/profile");
@@ -748,11 +808,8 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
       {visibleAuthMode && (
         <AuthModal
           mode={visibleAuthMode}
-          error={actionData?.form === visibleAuthMode ? actionData.error : undefined}
-          onClose={() => {
-            setAuthMode(null);
-            setDismissedAction(true);
-          }}
+          error={!dismissedError && actionData?.form === visibleAuthMode ? actionData.error : undefined}
+          onClose={closeAuth}
           onChange={openAuth}
         />
       )}

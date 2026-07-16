@@ -1,18 +1,8 @@
-import { isRouteErrorResponse, Link, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import { isRouteErrorResponse, Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import type { Route } from "./+types/root";
 import "./globals.css";
 
-const quickLinkStyle = {
-  border: "1px solid rgba(23, 32, 51, 0.14)",
-  borderRadius: 999,
-  padding: "9px 14px",
-  background: "rgba(255, 255, 255, 0.94)",
-  color: "#34405a",
-  fontSize: 14,
-  fontWeight: 700,
-  textDecoration: "none",
-  boxShadow: "0 8px 24px rgba(23, 32, 51, 0.12)",
-} as const;
+export const links: Route.LinksFunction = () => [{ rel: "icon", type: "image/svg+xml", href: "/favicon.svg" }];
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
@@ -25,27 +15,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
-        <nav
-          aria-label="クイックメニュー"
-          style={{
-            position: "fixed",
-            right: 16,
-            bottom: 77,
-            zIndex: 25,
-            display: "flex",
-            gap: 8,
-          }}
-        >
-          <Link to="/profile" style={quickLinkStyle}>
-            プロフィール
-          </Link>
-          <Link to="/bookmarks" style={quickLinkStyle}>
-            ブックマーク
-          </Link>
-          <Link to="/settings" aria-label="アカウント設定" style={quickLinkStyle}>
-            設定
-          </Link>
-        </nav>
         <ScrollRestoration />
         <Scripts />
       </body>

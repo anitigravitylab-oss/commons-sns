@@ -76,6 +76,40 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
   };
 }
 
+export async function isFollowing(env: AppEnv, followerId: string, followingId: string): Promise<boolean> {
+  const row = await env.DB.prepare("SELECT 1 AS present FROM follows WHERE follower_id = ? AND following_id = ?")
+    .bind(followerId, followingId)
+    .first<{ present: number }>();
+  return row !== null;
+}
+
+/**
+ * Follows the target user when no follow exists, otherwise unfollows.
+ *
+ * @returns The follow state after the toggle.
+ */
+export async function toggleFollow(
+  env: AppEnv,
+  followerId: string,
+  followingId: string,
+): Promise<{ following: boolean }> {
+  const deleted = await env.DB.prepare("DELETE FROM follows WHERE follower_id = ? AND following_id = ?")
+    .bind(followerId, followingId)
+    .run();
+  if ((deleted.meta.changes ?? 0) > 0) return { following: false };
+
+  // The EXISTS guard keeps a follow of a just-deleted account from failing the
+  // whole request; ON CONFLICT absorbs a concurrent duplicate toggle.
+  await env.DB.prepare(
+    `INSERT INTO follows (follower_id, following_id)
+     SELECT ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
+     ON CONFLICT (follower_id, following_id) DO NOTHING`,
+  )
+    .bind(followerId, followingId, followingId)
+    .run();
+  return { following: true };
+}
+
 /**
  * Sanitizes and updates a user's display name and bio.
  *
