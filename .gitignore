@@ -10,6 +10,8 @@
 .DS_Store
 *.pem
 .env*
+.dev.vars*
+!.dev.vars.example
 
 # tests
 /coverage/

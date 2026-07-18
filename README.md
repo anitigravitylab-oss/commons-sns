@@ -44,6 +44,27 @@ npx playwright install chromium # E2Eの初回のみ（ブラウザ取得）
 npm run test:e2e                # E2E（devサーバーは自動起動）
 ```
 
+## ローカル開発の Tips
+
+### タイムラインの自動更新（ローカル開発限定・暫定）
+
+ローカル開発中だけ、ホームのタイムラインを定期的に再取得して更新できます。本番ビルドでは無効化されます。
+
+間隔は `.dev.vars` で設定します（プロジェクトルートに作成・git 管理外）。
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+```dotenv
+# ミリ秒。0 で無効化、500〜60000ms にクランプ。未設定時は 2000ms。
+COMMONS_LOCAL_AUTO_RELOAD_MS=2000
+```
+
+URL クエリ `?autoReloadMs=0` で一時的に無効化、`?autoReloadMs=5000` で一時的に間隔を変更できます。
+
+> **注記**: この機能はローカル開発用の暫定措置です。本番向けの push 配信（SSE / WebSocket）を導入する際に削除します。
+
 ## 開発方針
 
 1. 公式サービスの実際のコードを公開する

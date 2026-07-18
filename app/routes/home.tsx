@@ -22,9 +22,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { type ComponentProps, useEffect, useMemo, useRef, useState } from "react";
-import { data, Form, Link, redirect, useFetcher, useNavigate, useSearchParams } from "react-router";
+import { data, Form, Link, redirect, useFetcher, useNavigate, useRevalidator, useSearchParams } from "react-router";
 import type { Route } from "./+types/home";
 import { cloudflareContext, type AppEnv } from "../cloudflare";
+import { resolveAutoReloadMs } from "../lib/auto-reload";
 import {
   createSession,
   destroySession,
@@ -60,13 +61,21 @@ export function meta() {
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
-  const requestedTab = new URL(request.url).searchParams.get("tab");
+  const url = new URL(request.url);
+  const requestedTab = url.searchParams.get("tab");
   const tab: TimelineScope = requestedTab === "following" && user ? "following" : "recommended";
+  // dev 限定のタイムライン自動更新間隔（ローカル開発用・本番では常に 0）。
+  // `.dev.vars` の COMMONS_LOCAL_AUTO_RELOAD_MS で設定。push 配信（SSE/WebSocket）導入時に削除する。
+  const autoReloadMs = resolveAutoReloadMs({
+    isDev: import.meta.env.DEV,
+    envValue: env.COMMONS_LOCAL_AUTO_RELOAD_MS,
+    queryValue: url.searchParams.get("autoReloadMs"),
+  });
   try {
-    return { user, tab, posts: await getTimeline(env, user?.id ?? null, tab), timelineError: false };
+    return { user, tab, posts: await getTimeline(env, user?.id ?? null, tab), timelineError: false, autoReloadMs };
   } catch (error) {
     console.error("getTimeline failed", error);
-    return { user, tab, posts: [] as TimelinePost[], timelineError: true };
+    return { user, tab, posts: [] as TimelinePost[], timelineError: true, autoReloadMs };
   }
 }
 
@@ -516,8 +525,9 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 }
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
-  const { user, posts, tab, timelineError } = loaderData;
+  const { user, posts, tab, timelineError, autoReloadMs } = loaderData;
   const navigate = useNavigate();
+  const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const authParam = searchParams.get("auth");
@@ -536,6 +546,22 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
   useEffect(() => {
     if (userId) setAuthMode(null);
   }, [userId]);
+
+  // dev 限定: タイムラインを定期的に再検証する。本番ビルドでは import.meta.env.DEV が
+  // false 定数となり、この effect の中身は minify で dead code 化する。
+  // visibilityState でバックグラウンドタブの無駄なポーリングを防ぐ。
+  // revalidator.state の確認で、取得が間に合わないときの重複再検証を防ぐ。
+  // push 配信（SSE/WebSocket）導入時に削除する。
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    if (!autoReloadMs) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible" && revalidator.state === "idle") {
+        void revalidator.revalidate();
+      }
+    }, autoReloadMs);
+    return () => window.clearInterval(timer);
+  }, [autoReloadMs, revalidator]);
 
   const visiblePosts = useMemo(() => {
     const normalized = query.trim().toLowerCase();
