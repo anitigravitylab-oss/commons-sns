@@ -1,4 +1,5 @@
 import { Heart, MessageCircle, Repeat2 } from "lucide-react";
+import { Link, useLocation } from "react-router";
 import { sliceCodePoints } from "./text";
 
 export function normalizeDate(value: string) {
@@ -57,17 +58,31 @@ export function UserAvatar({ name, handle, className }: { name: string; handle: 
   );
 }
 
+/**
+ * サブページの「タイムラインへ戻る」導線と同じ router state を組み立てる。
+ * タイムライン上ではタブ付きの現在URLを、サブページ上では受け継いだ backTo を使う。
+ */
+function useProfileLinkState() {
+  const location = useLocation();
+  const inherited = (location.state as { backTo?: string } | null)?.backTo;
+  const backTo = inherited ?? (location.pathname === "/" ? `${location.pathname}${location.search}` : undefined);
+  return backTo ? { backTo } : undefined;
+}
+
 export function PostIdentity({ name, handle, createdAt }: { name: string; handle: string; createdAt: string }) {
+  const linkState = useProfileLinkState();
   return (
     <div className="post-identity">
-      <strong>{name}</strong>
-      {isOfficialHandle(handle) && (
-        <span className="verified" title="公式">
-          <span aria-hidden="true">✓</span>
-          <span className="sr-only">公式</span>
-        </span>
-      )}
-      <span>@{handle}</span>
+      <Link to={`/users/${encodeURIComponent(handle)}`} state={linkState} className="post-identity-link">
+        <strong>{name}</strong>
+        {isOfficialHandle(handle) && (
+          <span className="verified" title="公式">
+            <span aria-hidden="true">✓</span>
+            <span className="sr-only">公式</span>
+          </span>
+        )}
+        <span>@{handle}</span>
+      </Link>
       <span>·</span>
       <time dateTime={normalizeDate(createdAt)} suppressHydrationWarning>
         {timeAgo(createdAt)}

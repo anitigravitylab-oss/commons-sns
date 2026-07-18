@@ -1,7 +1,23 @@
 import { expect, test } from "@playwright/test";
-import { clickExpecting, createPost, gotoApp, signUp, uniqueHandle } from "./helpers";
+import { clickExpecting, createPost, gotoApp, logOut, postCard, signUp, uniqueHandle } from "./helpers";
 
 test.describe("プロフィール", () => {
+  test("タイムラインの投稿者名からプロフィールへ移動できる", async ({ page }) => {
+    const user = await signUp(page);
+    const marker = `導線確認用 ${uniqueHandle()}`;
+    await createPost(page, marker);
+    await logOut(page);
+
+    // ゲストでも投稿者名のリンクからプロフィールへ飛べる。
+    await postCard(page, marker).locator(".post-identity-link").click();
+    await expect(page).toHaveURL(new RegExp(`/users/${user.handle}$`));
+    await expect(page.getByRole("heading", { name: user.displayName, level: 1 })).toBeVisible();
+
+    // 「タイムラインへ戻る」でタイムラインへ帰れる。
+    await page.getByRole("link", { name: "タイムラインへ戻る" }).click();
+    await expect(page.locator("form.composer, .account-switcher.logged-out").first()).toBeVisible();
+  });
+
   test("自分のプロフィールに投稿と件数が表示される", async ({ page }) => {
     const user = await signUp(page);
 

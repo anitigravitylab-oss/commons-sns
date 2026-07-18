@@ -495,7 +495,20 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.post-identity > span:not(.verified) {
+.post-identity-link {
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+.post-identity-link:hover strong,
+.post-identity-link:focus-visible strong {
+  text-decoration: underline;
+}
+.post-identity > span:not(.verified),
+.post-identity-link span:not(.verified) {
   color: var(--muted);
   font-size: 12px;
 }
