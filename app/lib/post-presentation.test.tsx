@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   avatarClass,
@@ -107,17 +108,23 @@ describe("UserAvatar", () => {
   });
 });
 
+// PostIdentity は useLocation() でリンクの戻り先を組み立てるため Router が必要。
+function renderInRouter(ui: React.ReactElement, path = "/") {
+  return renderToStaticMarkup(<MemoryRouter initialEntries={[path]}>{ui}</MemoryRouter>);
+}
+
 describe("PostIdentity", () => {
   it("shows the name, handle and a machine-readable timestamp", () => {
-    const html = renderToStaticMarkup(<PostIdentity name="あおい" handle="aoi_note" createdAt="2026-07-01 00:00:00" />);
+    const html = renderInRouter(<PostIdentity name="あおい" handle="aoi_note" createdAt="2026-07-01 00:00:00" />);
     expect(html).toContain("あおい");
     expect(html).toContain("@aoi_note");
+    expect(html).toContain('href="/users/aoi_note"');
     expect(html).toContain('dateTime="2026-07-01T00:00:00Z"');
     expect(html).not.toContain("公式");
   });
 
   it("adds the verified badge only for the official account", () => {
-    const html = renderToStaticMarkup(
+    const html = renderInRouter(
       <PostIdentity name="Commons 開発チーム" handle="commons_dev" createdAt="2026-07-01 00:00:00" />,
     );
     expect(html).toContain("公式");
@@ -149,14 +156,14 @@ describe("PostSummaryCard", () => {
   };
 
   it("renders the post body with identity and counts", () => {
-    const html = renderToStaticMarkup(<PostSummaryCard post={post} />);
+    const html = renderInRouter(<PostSummaryCard post={post} />);
     expect(html).toContain("テスト本文です");
     expect(html).toContain("@aoi_note");
     expect(html).toContain("いいね");
   });
 
   it("renders the optional action and children slots", () => {
-    const html = renderToStaticMarkup(
+    const html = renderInRouter(
       <PostSummaryCard post={post} action={<button>削除ボタン</button>}>
         <div>エラー表示</div>
       </PostSummaryCard>,
