@@ -31,6 +31,19 @@ npm run dev
 
 ターミナルに表示されるローカルURL（通常は `http://localhost:5173`）をブラウザで開きます。
 
+## テスト
+
+ユニット・統合テストはVitest、E2EテストはPlaywrightで書かれています。統合テストはMiniflare上の実D1（SQLite）に対して実行されるため、`COLLATE NOCASE` や `ON CONFLICT` など本番と同じSQLの挙動で検証されます。
+
+```bash
+npm test                 # ユニット・統合テスト
+npm run test:coverage    # カバレッジ付き（@vitest/coverage-v8）
+
+npm run db:migrate:local        # E2Eの初回のみ（ローカルD1へスキーマ適用）
+npx playwright install chromium # E2Eの初回のみ（ブラウザ取得）
+npm run test:e2e                # E2E（devサーバーは自動起動）
+```
+
 ## 開発方針
 
 1. 公式サービスの実際のコードを公開する

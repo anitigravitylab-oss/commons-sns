@@ -36,6 +36,8 @@ jobs:
             run: npm run build
           - name: migrations
             run: npm run db:migrate:local
+          - name: test
+            run: npm run test:coverage
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,3 +46,28 @@ jobs:
           cache: npm
       - run: npm ci
       - run: ${{ matrix.run }}
+
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install chromium --with-deps
+      # 日本語UIのスクリーンショットが文字化けしないようCJKフォントを入れる。
+      - name: Install fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk fonts-noto-color-emoji
+      - run: npm run db:migrate:local
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14

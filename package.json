@@ -15,6 +15,11 @@
     "lint:fix": "oxlint --fix",
     "lint:strict": "oxlint --deny-warnings",
     "lint:ci": "oxlint --format github",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:migrate:local": "wrangler d1 migrations apply commons-db --local",
@@ -30,14 +35,18 @@
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.44.0",
+    "@playwright/test": "^1.56.1",
     "@react-router/dev": "8.2.0",
     "@types/node": "26.1.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
+    "@vitest/coverage-v8": "^4.1.10",
+    "miniflare": "^4.20260708.1",
     "oxlint": "1.73.0",
     "prettier": "3.9.5",
     "typescript": "5.9.3",
     "vite": "8.1.4",
+    "vitest": "^4.1.10",
     "wrangler": "4.110.0"
   }
 }

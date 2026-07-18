@@ -13,5 +13,13 @@
     "react/react-in-jsx-scope": "off",
     "import/no-unassigned-import": "off"
   },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "app/testing/**", "e2e/**"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["node_modules", "dist", "build", "coverage", "*.min.js"]
 }

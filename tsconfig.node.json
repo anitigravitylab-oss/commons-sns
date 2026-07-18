@@ -1,5 +1,5 @@
 {
-  "include": ["vite.config.ts", "react-router.config.ts"],
+  "include": ["vite.config.ts", "react-router.config.ts", "vitest.config.ts", "playwright.config.ts", "e2e/**/*"],
   "compilerOptions": {
     "composite": true,
     "strict": true,
