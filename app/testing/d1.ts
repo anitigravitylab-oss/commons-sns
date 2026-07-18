@@ -1,10 +1,16 @@
 import { Miniflare } from "miniflare";
 import type { AppEnv } from "../cloudflare";
 import { hashPassword } from "../lib/auth.server";
-import migration0001 from "../../migrations/0001_initial.sql?raw";
-import migration0002 from "../../migrations/0002_auth.sql?raw";
-
-const MIGRATIONS = [migration0001, migration0002];
+// マイグレーションはファイル名順に全件を自動で取り込む。手書きリストだと
+// マイグレーション追加時にテストだけ古いスキーマで走る事故が起こる。
+const migrationModules = import.meta.glob<string>("../../migrations/*.sql", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+});
+const MIGRATIONS = Object.keys(migrationModules)
+  .sort()
+  .map((path) => migrationModules[path]);
 
 /**
  * Splits a migration file into individual statements for D1's prepare API.

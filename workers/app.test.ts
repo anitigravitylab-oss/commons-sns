@@ -39,14 +39,14 @@ describe("worker queue", () => {
   it("logs and acks every message in the batch", async () => {
     const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      const ack = vi.fn();
+      const acks = [vi.fn(), vi.fn()];
       const messages = [
-        { body: { type: "post.created", actorId: "a", objectId: "p1", occurredAt: "now" }, ack },
-        { body: { type: "reaction.changed", actorId: "b", objectId: "p2", occurredAt: "now" }, ack },
+        { body: { type: "post.created", actorId: "a", objectId: "p1", occurredAt: "now" }, ack: acks[0] },
+        { body: { type: "reaction.changed", actorId: "b", objectId: "p2", occurredAt: "now" }, ack: acks[1] },
       ];
       const batch = { messages } as unknown as MessageBatch<SocialEvent>;
       await worker.queue?.(batch);
-      expect(ack).toHaveBeenCalledTimes(2);
+      for (const ack of acks) expect(ack).toHaveBeenCalledTimes(1);
       expect(consoleLog).toHaveBeenCalledWith("social event", "post.created", "p1");
       expect(consoleLog).toHaveBeenCalledWith("social event", "reaction.changed", "p2");
     } finally {

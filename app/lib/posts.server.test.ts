@@ -97,13 +97,14 @@ describe("getTimeline (recommended)", () => {
     await addReaction(app.env, { userId: viewer.id, postId: "bulk_00", kind: "bookmark" });
     await addReaction(app.env, { userId: viewer.id, postId: "bulk_30", kind: "repost" });
 
-    const timeline = await getTimeline(app.env, viewer.id);
-    expect(timeline).toHaveLength(50);
-    const byId = new Map(timeline.map((post) => [post.id, post]));
+    // getTimeline caps at 50, so fetch through getUserPosts to hydrate all 55
+    // posts — bulk_00 lands in the second reaction-lookup batch.
+    const posts = await getUserPosts(app.env, author.id, viewer.id, { limit: 55 });
+    expect(posts).toHaveLength(55);
+    const byId = new Map(posts.map((post) => [post.id, post]));
     expect(byId.get("bulk_54")).toMatchObject({ liked: true, reposted: false, bookmarked: false });
     expect(byId.get("bulk_30")).toMatchObject({ reposted: true, liked: false });
-    // bulk_00 fell off the 50-post window entirely.
-    expect(byId.has("bulk_00")).toBe(false);
+    expect(byId.get("bulk_00")).toMatchObject({ bookmarked: true, liked: false, reposted: false });
   });
 
   it("caps the timeline at 50 posts", async () => {

@@ -91,9 +91,8 @@ describe("isFollowing / toggleFollow", () => {
   it("does not create a follow towards a user that no longer exists", async () => {
     const follower = await createUser(app.env);
     const result = await toggleFollow(app.env, follower.id, "user_gone");
-    // The EXISTS guard swallows the write; the reported state is optimistic
-    // but the next page load simply shows no follow.
-    expect(result).toEqual({ following: true });
+    // The EXISTS guard swallows the write and the reported state reflects it.
+    expect(result).toEqual({ following: false });
     expect(await isFollowing(app.env, follower.id, "user_gone")).toBe(false);
   });
 

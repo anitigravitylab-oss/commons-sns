@@ -100,14 +100,17 @@ export async function toggleFollow(
 
   // The EXISTS guard keeps a follow of a just-deleted account from failing the
   // whole request; ON CONFLICT absorbs a concurrent duplicate toggle.
-  await env.DB.prepare(
+  const inserted = await env.DB.prepare(
     `INSERT INTO follows (follower_id, following_id)
      SELECT ?, ? WHERE EXISTS (SELECT 1 FROM users WHERE id = ?)
      ON CONFLICT (follower_id, following_id) DO NOTHING`,
   )
     .bind(followerId, followingId, followingId)
     .run();
-  return { following: true };
+  if ((inserted.meta.changes ?? 0) > 0) return { following: true };
+  // Nothing was written: the target vanished (no follow) or a concurrent
+  // duplicate toggle already inserted the row — report what is stored.
+  return { following: await isFollowing(env, followerId, followingId) };
 }
 
 /**
