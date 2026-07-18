@@ -33,7 +33,13 @@ export async function action({ request, context }: Route.ActionArgs) {
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/?auth=login");
 
-  const formData = await request.formData();
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch (error) {
+    console.error("settings action formData failed", error);
+    return data<ActionResult>({ error: "問題が発生しました。時間をおいてもう一度お試しください。" }, { status: 500 });
+  }
   const intent = String(formData.get("intent") ?? "");
 
   if (intent === "logout") {

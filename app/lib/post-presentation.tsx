@@ -6,8 +6,20 @@ export function normalizeDate(value: string) {
   return hasTimezone ? value : `${value.replace(" ", "T")}Z`;
 }
 
-const sameYearFormat = new Intl.DateTimeFormat("ja-JP", { month: "long", day: "numeric" });
-const otherYearFormat = new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long", day: "numeric" });
+// SSR (Workers, UTC) とクライアントで同じラベルを描画するため、表示タイムゾーンを固定する。
+const DISPLAY_TIME_ZONE = "Asia/Tokyo";
+const sameYearFormat = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: DISPLAY_TIME_ZONE,
+  month: "long",
+  day: "numeric",
+});
+const otherYearFormat = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: DISPLAY_TIME_ZONE,
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const yearFormat = new Intl.DateTimeFormat("en-US", { timeZone: DISPLAY_TIME_ZONE, year: "numeric" });
 
 export function timeAgo(value: string) {
   const parsed = new Date(normalizeDate(value)).getTime();
@@ -19,7 +31,7 @@ export function timeAgo(value: string) {
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}時間`;
   if (seconds < 7 * 86_400) return `${Math.floor(seconds / 86_400)}日`;
   const date = new Date(parsed);
-  const format = date.getFullYear() === new Date(now).getFullYear() ? sameYearFormat : otherYearFormat;
+  const format = yearFormat.format(date) === yearFormat.format(new Date(now)) ? sameYearFormat : otherYearFormat;
   return format.format(date);
 }
 

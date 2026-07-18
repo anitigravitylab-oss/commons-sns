@@ -557,6 +557,10 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
   const visibleAuthMode = user ? null : (authMode ?? (dismissedError ? null : (actionData?.form ?? null)));
 
   const focusComposer = () => document.querySelector<HTMLTextAreaElement>("#composer")?.focus();
+
+  // サブページの「タイムラインへ戻る」リンクが選択中のタブへ戻れるようにする。
+  const backToTimeline = tab === "following" ? "/?tab=following" : "/";
+  const subpageState = { backTo: backToTimeline };
   const emptyState = query
     ? {
         icon: Search,
@@ -609,7 +613,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
                 );
               }
               return (
-                <Link key={label} className={isCurrent ? "nav-item active" : "nav-item"} to={to}>
+                <Link key={label} className={isCurrent ? "nav-item active" : "nav-item"} to={to} state={subpageState}>
                   {content}
                 </Link>
               );
@@ -677,7 +681,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
           </div>
           <button
             className={`mobile-avatar avatar ${user ? avatarClass(user.handle) : "avatar-dark"}`}
-            onClick={() => (user ? navigate("/profile") : requireLogin())}
+            onClick={() => (user ? navigate("/profile", { state: subpageState }) : requireLogin())}
             aria-label={user ? "プロフィール" : "ログイン"}
           >
             {user ? sliceCodePoints(user.displayName, 1) : "?"}
@@ -784,10 +788,10 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
               if (user) focusComposer();
               else requireLogin();
             } else if (id === "bookmarks") {
-              if (user) navigate("/bookmarks");
+              if (user) navigate("/bookmarks", { state: subpageState });
               else requireLogin();
             } else if (id === "profile") {
-              if (user) navigate("/profile");
+              if (user) navigate("/profile", { state: subpageState });
               else requireLogin();
             }
           };
