@@ -246,6 +246,12 @@ export default function SettingsPage({ loaderData, actionData }: Route.Component
         </>
       }
     >
+      {actionData?.error && !actionData.form && (
+        <div role="alert" className="form-error subpage-alert">
+          {actionData.error}
+        </div>
+      )}
+
       <LogoutSection />
       <PasswordSection />
 

@@ -1,6 +1,6 @@
 import { CalendarDays, Check, Settings, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { data, Link, redirect, useFetcher } from "react-router";
+import { data, Link, redirect, useFetcher, useLocation } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
@@ -324,6 +324,8 @@ function ProfileEditModal({
 export default function ProfilePage({ loaderData }: Route.ComponentProps) {
   const { user, profile, posts, page, hasNextPage, postsError, viewerFollows } = loaderData;
   const isOwner = user?.id === profile.id;
+  // ページ内リンクで router state (backTo) を引き継ぎ、戻り先のタブを保持する。
+  const location = useLocation();
   const [editing, setEditing] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
 
@@ -354,7 +356,7 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
             <UserAvatar name={profile.displayName} handle={profile.handle} className="profile-avatar" />
             {isOwner ? (
               <div className="profile-actions">
-                <Link to="/settings" className="profile-edit-button" aria-label="アカウント設定">
+                <Link to="/settings" state={location.state} className="profile-edit-button" aria-label="アカウント設定">
                   <Settings size={16} aria-hidden={true} /> 設定
                 </Link>
                 <button type="button" className="profile-edit-button" onClick={() => setEditing(true)}>
@@ -397,15 +399,29 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
               <PostSummaryCard key={post.id} post={post} />
             ))}
             <nav aria-label="プロフィール投稿のページ移動" className="pager">
-              {page > 1 ? <Link to={`?page=${page - 1}`}>← 新しい投稿</Link> : <span />}
-              {hasNextPage && <Link to={`?page=${page + 1}`}>過去の投稿 →</Link>}
+              {page > 1 ? (
+                <Link to={`?page=${page - 1}`} state={location.state}>
+                  ← 新しい投稿
+                </Link>
+              ) : (
+                <span />
+              )}
+              {hasNextPage && (
+                <Link to={`?page=${page + 1}`} state={location.state}>
+                  過去の投稿 →
+                </Link>
+              )}
             </nav>
           </>
         ) : (
           <div className="empty-state tall">
             <UserRound size={30} />
             <strong>{page > 1 ? "このページには投稿がありません" : "公開投稿はまだありません"}</strong>
-            {page > 1 && <Link to="?page=1">最初のページへ戻る</Link>}
+            {page > 1 && (
+              <Link to="?page=1" state={location.state}>
+                最初のページへ戻る
+              </Link>
+            )}
           </div>
         )}
       </SubpageShell>
