@@ -126,8 +126,16 @@ describe("sessions against D1", () => {
       id: user.id,
       handle: user.handle,
       displayName: "せっしょん",
+      avatarKey: null,
       role: "user",
     });
+  });
+
+  it("getSessionUser carries the user's preset avatar key", async () => {
+    const user = await createUser(app.env, { avatarKey: "preset:snow" });
+    const cookie = await loginCookie(app.env, user.id);
+    const sessionUser = await getSessionUser(getRequest("http://test.local/", { cookie }), app.env);
+    expect(sessionUser?.avatarKey).toBe("preset:snow");
   });
 
   it("getSessionUser reads the session cookie out of a crowded Cookie header", async () => {

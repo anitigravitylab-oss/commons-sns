@@ -1,14 +1,16 @@
-import { CalendarDays, Check, Settings, UserRound } from "lucide-react";
+import { CalendarDays, Check, Settings, Shuffle, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { data, Link, redirect, useFetcher, useLocation } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
-import { normalizeDate, PostSummaryCard, UserAvatar } from "../lib/post-presentation";
+import { presetAvatarKey } from "../lib/avatar-constraints";
+import { PRESET_AVATARS, PresetAvatarSymbol } from "../lib/avatar-presets";
+import { avatarClass, normalizeDate, PostSummaryCard, UserAvatar } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
 import { SubpageShell } from "../lib/subpage";
-import { countCodePoints, sanitizeText } from "../lib/text";
+import { countCodePoints, sanitizeText, sliceCodePoints } from "../lib/text";
 import {
   getUserProfileByHandle,
   isFollowing,
@@ -118,15 +120,20 @@ export async function action({ request, context, params }: Route.ActionArgs) {
 
     const displayName = String(formData.get("displayName") ?? "");
     const bio = String(formData.get("bio") ?? "");
+    // フィールドが無い（古いフォームの）送信はアイコンを変更しない。空文字は標準アイコンへ戻す。
+    const avatarField = formData.get("avatarKey");
+    const avatarKey = avatarField === null ? undefined : avatarField === "" ? null : String(avatarField);
 
     try {
-      await updateUserProfile(env, user.id, { displayName, bio });
+      await updateUserProfile(env, user.id, { displayName, bio, avatarKey });
     } catch (error) {
       if (error instanceof ProfileValidationError) {
         const message =
           error.code === "displayNameLength"
             ? `表示名は${DISPLAY_NAME_MIN_LENGTH}〜${DISPLAY_NAME_MAX_LENGTH}文字で入力してください。`
-            : `自己紹介は${BIO_MAX_LENGTH}文字以内で入力してください。`;
+            : error.code === "avatarKey"
+              ? "アイコンの選択が正しくありません。選び直してください。"
+              : `自己紹介は${BIO_MAX_LENGTH}文字以内で入力してください。`;
         return data<ActionResult>({ error: message }, { status: 400 });
       }
       console.error("Failed to update profile", error);
@@ -170,6 +177,77 @@ function FollowButton({ following }: { following: boolean }) {
   );
 }
 
+/**
+ * プリセットアバターの選択グリッド。値は `avatarKey` の radio 群として
+ * フォームに乗る（空文字 = 標準の文字アイコン）。
+ */
+function AvatarPickerField({
+  profile,
+  displayName,
+  avatarKey,
+  onChange,
+}: {
+  profile: UserProfile;
+  displayName: string;
+  avatarKey: string;
+  onChange: (value: string) => void;
+}) {
+  const shuffle = () => {
+    const candidates = PRESET_AVATARS.filter((preset) => presetAvatarKey(preset.id) !== avatarKey);
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    if (pick) onChange(presetAvatarKey(pick.id));
+  };
+
+  return (
+    <div className="pe-field">
+      <div className="pe-field-head">
+        <span id="pe-avatar-label" className="pe-field-label">
+          アイコン
+        </span>
+        <button type="button" className="pe-avatar-shuffle" onClick={shuffle}>
+          <Shuffle size={13} aria-hidden={true} /> おまかせ
+        </button>
+      </div>
+      <div
+        className="pe-avatar-grid"
+        role="radiogroup"
+        aria-labelledby="pe-avatar-label"
+        aria-describedby="pe-avatar-caption"
+      >
+        <label className="pe-avatar-option" title="文字（標準）">
+          <input type="radio" name="avatarKey" value="" checked={avatarKey === ""} onChange={() => onChange("")} />
+          <span className={`avatar ${avatarClass(profile.handle)}`} aria-hidden="true">
+            {sliceCodePoints(displayName.trim() || profile.handle, 1)}
+          </span>
+          <span className="sr-only">文字（標準）</span>
+        </label>
+        {PRESET_AVATARS.map((preset) => (
+          <label key={preset.id} className="pe-avatar-option" title={preset.label}>
+            <input
+              type="radio"
+              name="avatarKey"
+              value={presetAvatarKey(preset.id)}
+              checked={avatarKey === presetAvatarKey(preset.id)}
+              onChange={() => onChange(presetAvatarKey(preset.id))}
+            />
+            <span
+              className="avatar avatar-preset"
+              style={{ background: preset.background, color: preset.foreground }}
+              aria-hidden="true"
+            >
+              <PresetAvatarSymbol preset={preset} />
+            </span>
+            <span className="sr-only">{preset.label}</span>
+          </label>
+        ))}
+      </div>
+      <p id="pe-avatar-caption" className="pe-caption">
+        画像を用意しなくても、シンボルをプロフィールアイコンに設定できます。
+      </p>
+    </div>
+  );
+}
+
 function ProfileEditModal({
   profile,
   onClose,
@@ -183,6 +261,7 @@ function ProfileEditModal({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [displayName, setDisplayName] = useState(profile.displayName);
   const [bio, setBio] = useState(profile.bio);
+  const [avatarKey, setAvatarKey] = useState(profile.avatarKey ?? "");
 
   // Open as a modal and restore focus to the trigger on close (mirrors AuthModal).
   useEffect(() => {
@@ -198,8 +277,9 @@ function ProfileEditModal({
     };
   }, []);
 
+  // アバターの radio 群より、まず本文の編集対象である表示名へフォーカスする。
   useEffect(() => {
-    dialogRef.current?.querySelector<HTMLInputElement>("input:not([type='hidden'])")?.focus();
+    dialogRef.current?.querySelector<HTMLInputElement>("#pe-display-name")?.focus();
   }, []);
 
   const saved = fetcher.state === "idle" && fetcher.data?.ok === true;
@@ -241,7 +321,12 @@ function ProfileEditModal({
           <button type="button" className="modal-close" onClick={onClose} aria-label="閉じる">
             ×
           </button>
-          <UserAvatar name={displayName.trim() || profile.handle} handle={profile.handle} className="pe-avatar" />
+          <UserAvatar
+            name={displayName.trim() || profile.handle}
+            handle={profile.handle}
+            avatarKey={avatarKey || null}
+            className="pe-avatar"
+          />
         </div>
 
         <div className="pe-body">
@@ -254,6 +339,13 @@ function ProfileEditModal({
             }}
           >
             <input type="hidden" name="intent" value="updateProfile" />
+
+            <AvatarPickerField
+              profile={profile}
+              displayName={displayName}
+              avatarKey={avatarKey}
+              onChange={setAvatarKey}
+            />
 
             <div className="pe-field">
               <div className="pe-field-head">
@@ -353,7 +445,12 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
         <div className="profile-banner" />
         <section className="profile-summary">
           <div className="profile-summary-top">
-            <UserAvatar name={profile.displayName} handle={profile.handle} className="profile-avatar" />
+            <UserAvatar
+              name={profile.displayName}
+              handle={profile.handle}
+              avatarKey={profile.avatarKey}
+              className="profile-avatar"
+            />
             {isOwner ? (
               <div className="profile-actions">
                 <Link to="/settings" state={location.state} className="profile-edit-button" aria-label="アカウント設定">

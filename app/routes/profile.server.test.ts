@@ -226,6 +226,58 @@ describe("profile action", () => {
     expect(row?.bio).toBe("新しい自己紹介\nです");
   });
 
+  async function storedAvatarKey(userId: string) {
+    const row = await app.env.DB.prepare("SELECT avatar_key FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ avatar_key: string | null }>();
+    return row?.avatar_key ?? null;
+  }
+
+  it("selects a preset avatar and clears it again", async () => {
+    const owner = await createUser(app.env, { handle: "iconic" });
+    const cookie = await loginCookie(app.env, owner.id);
+
+    const selected = await callAction(
+      "iconic",
+      { intent: "updateProfile", displayName: "アイコン", bio: "", avatarKey: "preset:clover" },
+      cookie,
+    );
+    expect(expectData<ActionResult>(selected).data.ok).toBe(true);
+    expect(await storedAvatarKey(owner.id)).toBe("preset:clover");
+
+    // 空文字は「文字（標準）」への明示的な差し戻し。
+    const cleared = await callAction(
+      "iconic",
+      { intent: "updateProfile", displayName: "アイコン", bio: "", avatarKey: "" },
+      cookie,
+    );
+    expect(expectData<ActionResult>(cleared).data.ok).toBe(true);
+    expect(await storedAvatarKey(owner.id)).toBeNull();
+  });
+
+  it("keeps the stored avatar when the form does not send the field", async () => {
+    const owner = await createUser(app.env, { handle: "legacyform", avatarKey: "preset:moon" });
+    const cookie = await loginCookie(app.env, owner.id);
+    const result = await callAction("legacyform", { intent: "updateProfile", displayName: "改名", bio: "" }, cookie);
+    expect(expectData<ActionResult>(result).data.ok).toBe(true);
+    expect(await storedAvatarKey(owner.id)).toBe("preset:moon");
+  });
+
+  it("rejects an unknown avatar key with a localized 400", async () => {
+    const owner = await createUser(app.env, { handle: "hacky", avatarKey: "preset:clover" });
+    const cookie = await loginCookie(app.env, owner.id);
+    const result = await callAction(
+      "hacky",
+      { intent: "updateProfile", displayName: "改名", bio: "", avatarKey: "avatars/evil.png" },
+      cookie,
+    );
+    expect(expectData<ActionResult>(result)).toMatchObject({
+      status: 400,
+      data: { error: "アイコンの選択が正しくありません。選び直してください。" },
+    });
+    expect(await storedAvatarKey(owner.id)).toBe("preset:clover");
+  });
+
   it("forbids editing someone else's profile", async () => {
     await createUser(app.env, { handle: "victim", displayName: "被害者" });
     const attacker = await createUser(app.env);

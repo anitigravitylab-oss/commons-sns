@@ -88,6 +88,7 @@ export async function createUser(
     handle?: string;
     displayName?: string;
     bio?: string;
+    avatarKey?: string | null;
     role?: "user" | "moderator" | "admin";
     password?: string | null;
     createdAt?: string;
@@ -99,14 +100,15 @@ export async function createUser(
   const password = options.password === undefined ? "correct horse battery" : options.password;
   const credentials = password === null ? { hash: null, salt: null } : await hashPassword(password);
   await env.DB.prepare(
-    `INSERT INTO users (id, handle, display_name, bio, role, password_hash, password_salt, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
+    `INSERT INTO users (id, handle, display_name, bio, avatar_key, role, password_hash, password_salt, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
   )
     .bind(
       id,
       handle,
       displayName,
       options.bio ?? "",
+      options.avatarKey ?? null,
       options.role ?? "user",
       credentials.hash,
       credentials.salt,

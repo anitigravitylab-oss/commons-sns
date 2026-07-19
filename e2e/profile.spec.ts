@@ -60,6 +60,42 @@ test.describe("プロフィール", () => {
     await expect(page.locator(".profile-bio")).toContainText("あたらしい自己紹介。");
   });
 
+  test("プリセットアバターを選んでプロフィールアイコンにできる", async ({ page }) => {
+    const user = await signUp(page);
+    const marker = `アバター確認用 ${uniqueHandle()}`;
+    await createPost(page, marker);
+    await gotoApp(page, `/users/${user.handle}`);
+
+    const dialog = page.getByRole("dialog");
+    await clickExpecting(page.getByRole("button", { name: "プロフィールを編集" }), dialog);
+
+    // プリセットを選ぶとバナーのプレビューへ即時反映される。
+    await dialog.getByRole("radio", { name: "よつば" }).check();
+    await expect(dialog.locator(".pe-avatar.avatar-preset svg")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "保存する" }).click();
+    await expect(page.locator(".profile-saved-toast")).toContainText("プロフィールを更新しました");
+    await expect(dialog).toBeHidden();
+
+    // 保存後はプロフィールにも、リロード後にも残る。
+    await expect(page.locator(".profile-avatar.avatar-preset svg")).toBeVisible();
+    await page.reload();
+    await expect(page.locator(".profile-avatar.avatar-preset svg")).toBeVisible();
+
+    // タイムラインの投稿カードとコンポーザにも反映される。
+    await page.getByRole("link", { name: "タイムラインへ戻る" }).click();
+    await expect(postCard(page, marker).locator(".avatar-preset svg")).toBeVisible();
+    await expect(page.locator("form.composer .avatar-preset svg")).toBeVisible();
+
+    // 「文字（標準）」を選び直すと元の文字アイコンへ戻る。
+    await gotoApp(page, `/users/${user.handle}`);
+    await clickExpecting(page.getByRole("button", { name: "プロフィールを編集" }), dialog);
+    await dialog.getByRole("radio", { name: "文字（標準）" }).check();
+    await dialog.getByRole("button", { name: "保存する" }).click();
+    await expect(page.locator(".profile-saved-toast")).toContainText("プロフィールを更新しました");
+    await expect(page.locator(".profile-avatar.avatar-preset")).toHaveCount(0);
+  });
+
   test("表示名が空のままでは保存できない", async ({ page }) => {
     const user = await signUp(page);
     await gotoApp(page, `/users/${user.handle}`);
