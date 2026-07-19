@@ -48,6 +48,32 @@ export function isOfficialHandle(handle: string) {
 }
 
 /**
+ * Resolves what an avatar should look like — preset symbol when `avatarKey`
+ * points at one, otherwise the initial-letter fallback. Shared by
+ * `UserAvatar` and non-`div` render sites (e.g. the mobile header button)
+ * so the branching lives in one place.
+ */
+export function avatarAppearance({
+  name,
+  handle,
+  avatarKey,
+}: {
+  name: string;
+  handle: string;
+  avatarKey?: string | null;
+}): { className: string; style?: React.CSSProperties; children: React.ReactNode } {
+  const preset = findPresetAvatar(avatarKey);
+  if (preset) {
+    return {
+      className: "avatar avatar-preset",
+      style: { background: preset.background, color: preset.foreground },
+      children: <PresetAvatarSymbol preset={preset} />,
+    };
+  }
+  return { className: `avatar ${avatarClass(handle)}`, children: sliceCodePoints(name, 1) };
+}
+
+/**
  * Decorative avatar. Shows the user's preset symbol when `avatarKey` points
  * at one, otherwise falls back to the initial-letter avatar. The adjacent
  * text carries the user's name everywhere this is rendered, so it is hidden
@@ -64,22 +90,14 @@ export function UserAvatar({
   avatarKey?: string | null;
   className?: string;
 }) {
-  const suffix = className ? ` ${className}` : "";
-  const preset = findPresetAvatar(avatarKey);
-  if (preset) {
-    return (
-      <div
-        className={`avatar avatar-preset${suffix}`}
-        style={{ background: preset.background, color: preset.foreground }}
-        aria-hidden="true"
-      >
-        <PresetAvatarSymbol preset={preset} />
-      </div>
-    );
-  }
+  const appearance = avatarAppearance({ name, handle, avatarKey });
   return (
-    <div className={`avatar ${avatarClass(handle)}${suffix}`} aria-hidden="true">
-      {sliceCodePoints(name, 1)}
+    <div
+      className={`${appearance.className}${className ? ` ${className}` : ""}`}
+      style={appearance.style}
+      aria-hidden="true"
+    >
+      {appearance.children}
     </div>
   );
 }

@@ -35,11 +35,10 @@ import {
   verifyPasswordOrDummy,
 } from "../lib/auth.server";
 import type { SessionUser } from "../lib/auth.server";
-import { findPresetAvatar, PresetAvatarSymbol } from "../lib/avatar-presets";
-import { avatarClass, PostIdentity, UserAvatar } from "../lib/post-presentation";
+import { avatarAppearance, PostIdentity, UserAvatar } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
 import type { TimelinePost, TimelineScope } from "../lib/posts.server";
-import { countCodePoints, isReservedHandle, sanitizeText, sliceCodePoints } from "../lib/text";
+import { countCodePoints, isReservedHandle, sanitizeText } from "../lib/text";
 
 type ActionResult = {
   ok?: boolean;
@@ -527,7 +526,9 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
   const { user, posts, tab, timelineError, autoReloadMs } = loaderData;
-  const mobileAvatarPreset = user ? findPresetAvatar(user.avatarKey) : null;
+  const mobileAvatar = user
+    ? avatarAppearance({ name: user.displayName, handle: user.handle, avatarKey: user.avatarKey })
+    : null;
   const navigate = useNavigate();
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -715,24 +716,12 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             )}
           </div>
           <button
-            className={`mobile-avatar avatar ${
-              mobileAvatarPreset ? "avatar-preset" : user ? avatarClass(user.handle) : "avatar-dark"
-            }`}
-            style={
-              mobileAvatarPreset
-                ? { background: mobileAvatarPreset.background, color: mobileAvatarPreset.foreground }
-                : undefined
-            }
+            className={`mobile-avatar ${mobileAvatar ? mobileAvatar.className : "avatar avatar-dark"}`}
+            style={mobileAvatar?.style}
             onClick={() => (user ? navigate(profileTo, { state: subpageState }) : requireLogin())}
             aria-label={user ? "プロフィール" : "ログイン"}
           >
-            {mobileAvatarPreset ? (
-              <PresetAvatarSymbol preset={mobileAvatarPreset} />
-            ) : user ? (
-              sliceCodePoints(user.displayName, 1)
-            ) : (
-              "?"
-            )}
+            {mobileAvatar ? mobileAvatar.children : "?"}
           </button>
         </header>
         <div className="topic-strip">

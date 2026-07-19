@@ -1089,6 +1089,18 @@ a {
     0 0 0 2px #fff,
     0 0 0 4px var(--ink);
 }
+/* forced-colors（Windows ハイコントラスト等）は box-shadow を無効化するため、
+   outline で選択中とフォーカスを示す。フォーカスは破線で選択と区別する。 */
+@media (forced-colors: active) {
+  .pe-avatar-option input:checked + .avatar {
+    outline: 3px solid Highlight;
+    outline-offset: 2px;
+  }
+  .pe-avatar-option input:focus-visible + .avatar {
+    outline: 3px dashed CanvasText;
+    outline-offset: 2px;
+  }
+}
 .pe-avatar-shuffle {
   display: inline-flex;
   align-items: center;

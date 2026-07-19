@@ -87,6 +87,11 @@ test.describe("プロフィール", () => {
     await expect(postCard(page, marker).locator(".avatar-preset svg")).toBeVisible();
     await expect(page.locator("form.composer .avatar-preset svg")).toBeVisible();
 
+    // モバイル幅ではヘッダーのアバターボタンにも反映される。
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator(".mobile-avatar.avatar-preset svg")).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 720 });
+
     // 「文字（標準）」を選び直すと元の文字アイコンへ戻る。
     await gotoApp(page, `/users/${user.handle}`);
     await clickExpecting(page.getByRole("button", { name: "プロフィールを編集" }), dialog);

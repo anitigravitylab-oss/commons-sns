@@ -48,13 +48,13 @@ const PRESET_AVATAR_DEFS: Record<PresetAvatarId, Omit<PresetAvatar, "id">> = {
   plus: {
     label: "プラス",
     background: "#ded9f4",
-    foreground: "#c2679b",
+    foreground: "#bc5891",
     symbol: <path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6V3z" />,
   },
   spark: {
     label: "きらめき",
     background: "#fbe7c3",
-    foreground: "#de8f2b",
+    foreground: "#b9741d",
     symbol: <path d="M12 2c.9 5.4 4.6 9.1 10 10-5.4.9-9.1 4.6-10 10-.9-5.4-4.6-9.1-10-10 5.4-.9 9.1-4.6 10-10z" />,
   },
   snow: {
@@ -73,13 +73,13 @@ const PRESET_AVATAR_DEFS: Record<PresetAvatarId, Omit<PresetAvatar, "id">> = {
   drop: {
     label: "しずく",
     background: "#d2ebe5",
-    foreground: "#35948a",
+    foreground: "#349086",
     symbol: <path d="M12 2.6c4.4 4.9 6.9 8.3 6.9 11.6a6.9 6.9 0 1 1-13.8 0c0-3.3 2.5-6.7 6.9-11.6z" />,
   },
   sun: {
     label: "たいよう",
     background: "#fcd9c0",
-    foreground: "#df6f33",
+    foreground: "#cc5c20",
     symbol: (
       <>
         <rect x="11" y="2" width="2" height="20" rx="1" />
@@ -116,13 +116,13 @@ const PRESET_AVATAR_DEFS: Record<PresetAvatarId, Omit<PresetAvatar, "id">> = {
   castle: {
     label: "おしろ",
     background: "#f4ecd7",
-    foreground: "#d76a8c",
+    foreground: "#d46084",
     symbol: <path d="M4 21V6h3.5v3.2h2.7V6h3.6v3.2h2.7V6H20v15H4z" />,
   },
   heart: {
     label: "ハート",
     background: "#f7d7d3",
-    foreground: "#d95555",
+    foreground: "#d74d4d",
     symbol: (
       <path d="M12 20.7C7.2 17.3 3.4 14 3.4 9.9a4.9 4.9 0 0 1 8.6-3.2 4.9 4.9 0 0 1 8.6 3.2c0 4.1-3.8 7.4-8.6 10.8z" />
     ),

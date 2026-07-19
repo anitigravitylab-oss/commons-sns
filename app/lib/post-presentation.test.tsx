@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  avatarAppearance,
   avatarClass,
   isOfficialHandle,
   normalizeDate,
@@ -121,6 +122,24 @@ describe("UserAvatar", () => {
       const html = renderToStaticMarkup(<UserAvatar name="あおい" handle="aoi_note" avatarKey={avatarKey} />);
       expect(html).toContain(">あ<");
       expect(html).not.toContain("avatar-preset");
+    }
+  });
+});
+
+// モバイルヘッダーのボタンなど div 以外の要素からも使われる共有ヘルパー。
+describe("avatarAppearance", () => {
+  it("returns the preset appearance for a preset key", () => {
+    const appearance = avatarAppearance({ name: "あおい", handle: "aoi_note", avatarKey: "preset:clover" });
+    expect(appearance.className).toBe("avatar avatar-preset");
+    expect(appearance.style).toBeDefined();
+  });
+
+  it("returns the letter appearance for null and non-preset keys", () => {
+    for (const avatarKey of [null, undefined, "preset:unknown"]) {
+      const appearance = avatarAppearance({ name: "あおい", handle: "aoi_note", avatarKey });
+      expect(appearance.className).toBe("avatar avatar-violet");
+      expect(appearance.style).toBeUndefined();
+      expect(appearance.children).toBe("あ");
     }
   });
 });

@@ -192,10 +192,16 @@ function AvatarPickerField({
   avatarKey: string;
   onChange: (value: string) => void;
 }) {
+  // 「おまかせ」は radio の checked を離れた場所から切り替えるため、
+  // スクリーンリーダー向けに選ばれた結果を live region で読み上げる。
+  const [announcement, setAnnouncement] = useState("");
   const shuffle = () => {
     const candidates = PRESET_AVATARS.filter((preset) => presetAvatarKey(preset.id) !== avatarKey);
     const pick = candidates[Math.floor(Math.random() * candidates.length)];
-    if (pick) onChange(presetAvatarKey(pick.id));
+    if (pick) {
+      onChange(presetAvatarKey(pick.id));
+      setAnnouncement(`「${pick.label}」を選びました`);
+    }
   };
 
   return (
@@ -244,6 +250,9 @@ function AvatarPickerField({
       <p id="pe-avatar-caption" className="pe-caption">
         画像を用意しなくても、シンボルをプロフィールアイコンに設定できます。
       </p>
+      <span aria-live="polite" className="sr-only">
+        {announcement}
+      </span>
     </div>
   );
 }
