@@ -23,7 +23,7 @@ function minutesAgo(minutes: number) {
 
 describe("getTimeline (recommended)", () => {
   it("returns public, non-deleted posts newest first with author identity", async () => {
-    const alice = await createUser(app.env, { handle: "alice", displayName: "アリス" });
+    const alice = await createUser(app.env, { handle: "alice", displayName: "アリス", avatarKey: "preset:clover" });
     const bob = await createUser(app.env, { handle: "bob", displayName: "ボブ" });
 
     await createPost(app.env, { id: "p_old", authorId: alice.id, body: "古い投稿", createdAt: minutesAgo(30) });
@@ -38,12 +38,15 @@ describe("getTimeline (recommended)", () => {
       authorId: bob.id,
       name: "ボブ",
       handle: "bob",
+      avatarKey: null,
       body: "新しい投稿",
       createdAt: minutesAgo(5),
       liked: false,
       reposted: false,
       bookmarked: false,
     });
+    // 投稿者のプリセットアバターはタイムラインの各投稿へ載る。
+    expect(timeline[1].avatarKey).toBe("preset:clover");
   });
 
   it("breaks created_at ties by descending id", async () => {

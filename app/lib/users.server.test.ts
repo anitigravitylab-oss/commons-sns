@@ -52,12 +52,19 @@ describe("getUserProfileByHandle", () => {
       handle: "profiled",
       displayName: "プロフィール",
       bio: "自己紹介です",
+      avatarKey: null,
       role: "user",
       createdAt: "2026-01-15 09:30:00",
       postCount: 2,
       followerCount: 1,
       followingCount: 1,
     });
+  });
+
+  it("returns the stored preset avatar key", async () => {
+    await createUser(app.env, { handle: "iconed", avatarKey: "preset:clover" });
+    const profile = await getUserProfileByHandle(app.env, "iconed");
+    expect(profile?.avatarKey).toBe("preset:clover");
   });
 
   it("matches handles case-insensitively", async () => {
@@ -161,5 +168,37 @@ describe("updateUserProfile", () => {
       .first<{ display_name: string; bio: string }>();
     expect(row?.display_name).toBe("元の名前");
     expect(row?.bio).toBe("元の自己紹介");
+  });
+
+  async function storedAvatarKey(userId: string) {
+    const row = await app.env.DB.prepare("SELECT avatar_key FROM users WHERE id = ?")
+      .bind(userId)
+      .first<{ avatar_key: string | null }>();
+    return row?.avatar_key ?? null;
+  }
+
+  it("saves a preset avatar key and clears it back to the default", async () => {
+    const user = await createUser(app.env);
+    await updateUserProfile(app.env, user.id, { displayName: "名前", bio: "", avatarKey: "preset:clover" });
+    expect(await storedAvatarKey(user.id)).toBe("preset:clover");
+
+    await updateUserProfile(app.env, user.id, { displayName: "名前", bio: "", avatarKey: null });
+    expect(await storedAvatarKey(user.id)).toBeNull();
+  });
+
+  it("leaves the avatar untouched when avatarKey is not part of the update", async () => {
+    const user = await createUser(app.env, { avatarKey: "preset:moon" });
+    await updateUserProfile(app.env, user.id, { displayName: "改名", bio: "本文" });
+    expect(await storedAvatarKey(user.id)).toBe("preset:moon");
+  });
+
+  it("rejects unknown avatar keys and never writes them", async () => {
+    const user = await createUser(app.env, { avatarKey: "preset:clover" });
+    for (const avatarKey of ["clover", "preset:unknown", "avatars/evil.png", "preset:"]) {
+      await expect(
+        updateUserProfile(app.env, user.id, { displayName: "名前", bio: "", avatarKey }),
+      ).rejects.toMatchObject({ code: "avatarKey", name: "ProfileValidationError" });
+    }
+    expect(await storedAvatarKey(user.id)).toBe("preset:clover");
   });
 });

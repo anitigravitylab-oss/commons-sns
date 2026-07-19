@@ -1,4 +1,5 @@
 import type { AppEnv } from "../cloudflare";
+import { presetAvatarIdFromKey } from "./avatar-constraints";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "./profile-constraints";
 import { countCodePoints, sanitizeText } from "./text";
 
@@ -7,6 +8,7 @@ export type UserProfile = {
   handle: string;
   displayName: string;
   bio: string;
+  avatarKey: string | null;
   role: "user" | "moderator" | "admin";
   createdAt: string;
   postCount: number;
@@ -14,11 +16,12 @@ export type UserProfile = {
   followingCount: number;
 };
 
-export type ProfileValidationErrorCode = "displayNameLength" | "bioLength";
+export type ProfileValidationErrorCode = "displayNameLength" | "bioLength" | "avatarKey";
 
 const PROFILE_VALIDATION_MESSAGES: Record<ProfileValidationErrorCode, string> = {
   displayNameLength: `displayName must be between ${DISPLAY_NAME_MIN_LENGTH} and ${DISPLAY_NAME_MAX_LENGTH} characters`,
   bioLength: `bio must be ${BIO_MAX_LENGTH} characters or fewer`,
+  avatarKey: "avatarKey must be a known preset avatar key",
 };
 
 export class ProfileValidationError extends Error {
@@ -36,6 +39,7 @@ type UserProfileRow = {
   handle: string;
   display_name: string;
   bio: string;
+  avatar_key: string | null;
   role: UserProfile["role"];
   created_at: string;
   post_count: number;
@@ -50,6 +54,7 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
        u.handle,
        u.display_name,
        u.bio,
+       u.avatar_key,
        u.role,
        u.created_at,
        (SELECT COUNT(*) FROM posts p WHERE p.author_id = u.id AND p.deleted_at IS NULL AND p.visibility = 'public') AS post_count,
@@ -68,6 +73,7 @@ export async function getUserProfileByHandle(env: AppEnv, handle: string): Promi
     handle: row.handle,
     displayName: row.display_name,
     bio: row.bio,
+    avatarKey: row.avatar_key,
     role: row.role,
     createdAt: row.created_at,
     postCount: Number(row.post_count),
@@ -114,12 +120,20 @@ export async function toggleFollow(
 }
 
 /**
- * Sanitizes and updates a user's display name and bio.
+ * Sanitizes and updates a user's display name, bio and avatar selection.
  *
- * @param values - The display name and bio to save.
- * @throws `ProfileValidationError` if the display name is shorter than the minimum length or longer than the maximum length, or if the bio exceeds its allowed length.
+ * @param values - The display name and bio to save. `avatarKey` is optional:
+ * `undefined` leaves the stored avatar untouched (a form without the field
+ * must not clobber it), `null` resets to the default initial-letter avatar,
+ * and a string must be a known `preset:<id>` key — arbitrary strings never
+ * reach the database.
+ * @throws `ProfileValidationError` if the display name is shorter than the minimum length or longer than the maximum length, if the bio exceeds its allowed length, or if the avatar key is not a known preset.
  */
-export async function updateUserProfile(env: AppEnv, userId: string, values: { displayName: string; bio: string }) {
+export async function updateUserProfile(
+  env: AppEnv,
+  userId: string,
+  values: { displayName: string; bio: string; avatarKey?: string | null },
+) {
   const displayName = sanitizeText(values.displayName);
   const bio = sanitizeText(values.bio, { multiline: true });
   const displayNameLength = countCodePoints(displayName, DISPLAY_NAME_MAX_LENGTH);
@@ -129,6 +143,18 @@ export async function updateUserProfile(env: AppEnv, userId: string, values: { d
   if (countCodePoints(bio, BIO_MAX_LENGTH) > BIO_MAX_LENGTH) {
     throw new ProfileValidationError("bioLength");
   }
+  const avatarKey = values.avatarKey;
+  if (typeof avatarKey === "string" && presetAvatarIdFromKey(avatarKey) === null) {
+    throw new ProfileValidationError("avatarKey");
+  }
 
-  await env.DB.prepare("UPDATE users SET display_name = ?, bio = ? WHERE id = ?").bind(displayName, bio, userId).run();
+  if (avatarKey === undefined) {
+    await env.DB.prepare("UPDATE users SET display_name = ?, bio = ? WHERE id = ?")
+      .bind(displayName, bio, userId)
+      .run();
+    return;
+  }
+  await env.DB.prepare("UPDATE users SET display_name = ?, bio = ?, avatar_key = ? WHERE id = ?")
+    .bind(displayName, bio, avatarKey, userId)
+    .run();
 }

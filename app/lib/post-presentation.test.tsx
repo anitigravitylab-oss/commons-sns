@@ -106,6 +106,23 @@ describe("UserAvatar", () => {
     const html = renderToStaticMarkup(<UserAvatar name="あ" handle="aoi_note" className="small" />);
     expect(html).toContain('class="avatar avatar-violet small"');
   });
+
+  it("renders the preset symbol instead of the letter for a preset key", () => {
+    const html = renderToStaticMarkup(
+      <UserAvatar name="あおい" handle="aoi_note" avatarKey="preset:clover" className="small" />,
+    );
+    expect(html).toContain('class="avatar avatar-preset small"');
+    expect(html).toContain("<svg");
+    expect(html).not.toContain(">あ<");
+  });
+
+  it("falls back to the letter avatar for null and non-preset keys", () => {
+    for (const avatarKey of [null, "preset:unknown", "avatars/user_1/original.png"]) {
+      const html = renderToStaticMarkup(<UserAvatar name="あおい" handle="aoi_note" avatarKey={avatarKey} />);
+      expect(html).toContain(">あ<");
+      expect(html).not.toContain("avatar-preset");
+    }
+  });
 });
 
 // PostIdentity は useLocation() でリンクの戻り先を組み立てるため Router が必要。
@@ -148,6 +165,7 @@ describe("PostSummaryCard", () => {
     id: "post_x",
     name: "あおい",
     handle: "aoi_note",
+    avatarKey: null,
     body: "テスト本文です",
     createdAt: "2026-07-01 00:00:00",
     replies: 0,

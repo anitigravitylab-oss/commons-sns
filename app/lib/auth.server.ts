@@ -9,6 +9,7 @@ export type SessionUser = {
   id: string;
   handle: string;
   displayName: string;
+  avatarKey: string | null;
   role: "user" | "moderator" | "admin";
 };
 
@@ -117,19 +118,20 @@ export async function getSessionUser(request: Request, env: AppEnv): Promise<Ses
   try {
     const idHash = await sha256(token);
     const row = await env.DB.prepare(
-      `SELECT u.id, u.handle, u.display_name, u.role
+      `SELECT u.id, u.handle, u.display_name, u.avatar_key, u.role
        FROM sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.id_hash = ? AND s.expires_at > datetime('now')
        LIMIT 1`,
     )
       .bind(idHash)
-      .first<Omit<AuthRow, "password_hash" | "password_salt">>();
+      .first<Omit<AuthRow, "password_hash" | "password_salt"> & { avatar_key: string | null }>();
     if (!row) return null;
     return {
       id: row.id,
       handle: row.handle,
       displayName: row.display_name,
+      avatarKey: row.avatar_key,
       role: row.role,
     };
   } catch (error) {
