@@ -35,7 +35,6 @@ import {
   verifyPasswordOrDummy,
 } from "../lib/auth.server";
 import type { SessionUser } from "../lib/auth.server";
-import { findPresetAvatar, PresetAvatarSymbol } from "../lib/avatar-presets";
 import { avatarClass, PostIdentity, UserAvatar } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
 import type { TimelinePost, TimelineScope } from "../lib/posts.server";
@@ -406,7 +405,7 @@ function Composer({ user, onRequireLogin }: { user: SessionUser | null; onRequir
 
   return (
     <IntentForm fetcher={fetcher} intent="createPost" className="composer">
-      <UserAvatar name={user.displayName} handle={user.handle} avatarKey={user.avatarKey} />
+      <UserAvatar name={user.displayName} handle={user.handle} />
       <div className="composer-main">
         <textarea
           id="composer"
@@ -492,7 +491,7 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
   const deleteFetcher = useFetcher<ActionResult>();
   return (
     <article className="post">
-      <UserAvatar name={post.name} handle={post.handle} avatarKey={post.avatarKey} />
+      <UserAvatar name={post.name} handle={post.handle} />
       <div className="post-content">
         <header>
           <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
@@ -527,7 +526,6 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
   const { user, posts, tab, timelineError, autoReloadMs } = loaderData;
-  const mobileAvatarPreset = user ? findPresetAvatar(user.avatarKey) : null;
   const navigate = useNavigate();
   const revalidator = useRevalidator();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -660,7 +658,7 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
           </button>
           {user ? (
             <div className="account-switcher">
-              <UserAvatar name={user.displayName} handle={user.handle} avatarKey={user.avatarKey} className="small" />
+              <UserAvatar name={user.displayName} handle={user.handle} className="small" />
               <span className="account-copy">
                 <strong>{user.displayName}</strong>
                 <small>@{user.handle}</small>
@@ -715,24 +713,11 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
             )}
           </div>
           <button
-            className={`mobile-avatar avatar ${
-              mobileAvatarPreset ? "avatar-preset" : user ? avatarClass(user.handle) : "avatar-dark"
-            }`}
-            style={
-              mobileAvatarPreset
-                ? { background: mobileAvatarPreset.background, color: mobileAvatarPreset.foreground }
-                : undefined
-            }
+            className={`mobile-avatar avatar ${user ? avatarClass(user.handle) : "avatar-dark"}`}
             onClick={() => (user ? navigate(profileTo, { state: subpageState }) : requireLogin())}
             aria-label={user ? "プロフィール" : "ログイン"}
           >
-            {mobileAvatarPreset ? (
-              <PresetAvatarSymbol preset={mobileAvatarPreset} />
-            ) : user ? (
-              sliceCodePoints(user.displayName, 1)
-            ) : (
-              "?"
-            )}
+            {user ? sliceCodePoints(user.displayName, 1) : "?"}
           </button>
         </header>
         <div className="topic-strip">

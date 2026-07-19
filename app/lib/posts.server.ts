@@ -5,7 +5,6 @@ export type TimelinePost = {
   authorId: string;
   name: string;
   handle: string;
-  avatarKey: string | null;
   body: string;
   createdAt: string;
   replies: number;
@@ -21,7 +20,6 @@ type PostRow = {
   author_id: string;
   display_name: string;
   handle: string;
-  avatar_key: string | null;
   body: string;
   created_at: string;
   replies: number;
@@ -36,7 +34,6 @@ const POST_SELECT_SQL = `
   p.author_id,
   u.display_name,
   u.handle,
-  u.avatar_key,
   p.body,
   p.created_at,
   (SELECT COUNT(*) FROM posts replies WHERE replies.reply_to_id = p.id AND replies.deleted_at IS NULL) AS replies,
@@ -78,7 +75,6 @@ async function hydratePosts(env: AppEnv, rows: PostRow[], viewerId: string | nul
     authorId: row.author_id,
     name: row.display_name,
     handle: row.handle,
-    avatarKey: row.avatar_key,
     body: row.body,
     createdAt: row.created_at,
     replies: Number(row.replies),

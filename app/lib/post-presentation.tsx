@@ -1,6 +1,5 @@
 import { Heart, MessageCircle, Repeat2 } from "lucide-react";
 import { Link, useLocation } from "react-router";
-import { findPresetAvatar, PresetAvatarSymbol } from "./avatar-presets";
 import { sliceCodePoints } from "./text";
 
 export function normalizeDate(value: string) {
@@ -48,37 +47,12 @@ export function isOfficialHandle(handle: string) {
 }
 
 /**
- * Decorative avatar. Shows the user's preset symbol when `avatarKey` points
- * at one, otherwise falls back to the initial-letter avatar. The adjacent
- * text carries the user's name everywhere this is rendered, so it is hidden
- * from assistive tech.
+ * Decorative initial-letter avatar. The adjacent text carries the user's
+ * name everywhere this is rendered, so it is hidden from assistive tech.
  */
-export function UserAvatar({
-  name,
-  handle,
-  avatarKey,
-  className,
-}: {
-  name: string;
-  handle: string;
-  avatarKey?: string | null;
-  className?: string;
-}) {
-  const suffix = className ? ` ${className}` : "";
-  const preset = findPresetAvatar(avatarKey);
-  if (preset) {
-    return (
-      <div
-        className={`avatar avatar-preset${suffix}`}
-        style={{ background: preset.background, color: preset.foreground }}
-        aria-hidden="true"
-      >
-        <PresetAvatarSymbol preset={preset} />
-      </div>
-    );
-  }
+export function UserAvatar({ name, handle, className }: { name: string; handle: string; className?: string }) {
   return (
-    <div className={`avatar ${avatarClass(handle)}${suffix}`} aria-hidden="true">
+    <div className={`avatar ${avatarClass(handle)}${className ? ` ${className}` : ""}`} aria-hidden="true">
       {sliceCodePoints(name, 1)}
     </div>
   );
@@ -143,7 +117,6 @@ export type PostSummary = {
   id: string;
   name: string;
   handle: string;
-  avatarKey: string | null;
   body: string;
   createdAt: string;
   replies: number;
@@ -168,7 +141,7 @@ export function PostSummaryCard({
 }) {
   return (
     <article className="post-summary">
-      <UserAvatar name={post.name} handle={post.handle} avatarKey={post.avatarKey} />
+      <UserAvatar name={post.name} handle={post.handle} />
       <div className="post-summary-main">
         <header>
           <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
