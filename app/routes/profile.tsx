@@ -338,16 +338,17 @@ function ProfileEditModal({
           />
         </div>
 
-        <div className="pe-body">
-          <h2 id="profile-edit-title">プロフィールを編集</h2>
-          <fetcher.Form
-            method="post"
-            className="pe-form"
-            onSubmit={(event) => {
-              if (!canSave) event.preventDefault();
-            }}
-          >
-            <input type="hidden" name="intent" value="updateProfile" />
+        <fetcher.Form
+          method="post"
+          className="pe-form"
+          onSubmit={(event) => {
+            if (!canSave) event.preventDefault();
+          }}
+        >
+          <input type="hidden" name="intent" value="updateProfile" />
+
+          <div className="pe-body">
+            <h2 id="profile-edit-title">プロフィールを編集</h2>
 
             <AvatarPickerField
               profile={profile}
@@ -406,17 +407,17 @@ function ProfileEditModal({
                 {fetcher.data.error}
               </div>
             )}
+          </div>
 
-            <div className="pe-actions">
-              <button type="button" className="pe-cancel" onClick={onClose}>
-                キャンセル
-              </button>
-              <button type="submit" className="pe-save" disabled={!canSave}>
-                {isSaving ? "保存中…" : "保存する"}
-              </button>
-            </div>
-          </fetcher.Form>
-        </div>
+          <div className="pe-actions">
+            <button type="button" className="pe-cancel" onClick={onClose}>
+              キャンセル
+            </button>
+            <button type="submit" className="pe-save" disabled={!canSave}>
+              {isSaving ? "保存中…" : "保存する"}
+            </button>
+          </div>
+        </fetcher.Form>
       </dialog>
     </div>
   );

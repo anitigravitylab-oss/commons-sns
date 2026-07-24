@@ -60,6 +60,29 @@ test.describe("プロフィール", () => {
     await expect(page.locator(".profile-bio")).toContainText("あたらしい自己紹介。");
   });
 
+  test("モバイル幅でも編集モーダルの保存ボタンが画面内に収まり保存できる", async ({ page }) => {
+    const user = await signUp(page);
+    // 縦の短いスマートフォン幅。以前はモーダルが縦に伸び、保存ボタンが
+    // 画面下へはみ出して押せなかった（下にのめり込む不具合）の回帰防止。
+    await page.setViewportSize({ width: 375, height: 667 });
+    await gotoApp(page, `/users/${user.handle}`);
+
+    const dialog = page.getByRole("dialog");
+    await clickExpecting(page.getByRole("button", { name: "プロフィールを編集" }), dialog);
+
+    // 保存ボタンがビューポート内に完全に収まっている（下にクリップされていない）。
+    const save = dialog.getByRole("button", { name: "保存する" });
+    await expect(save).toBeInViewport({ ratio: 1 });
+
+    // 位置だけでなく、実際に保存まで通ることも確認する。
+    const newName = `モバイル ${uniqueHandle().slice(-4)}`;
+    await dialog.getByLabel("表示名").fill(newName);
+    await save.click();
+    await expect(page.locator(".profile-saved-toast")).toContainText("プロフィールを更新しました");
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole("heading", { name: newName, level: 1 })).toBeVisible();
+  });
+
   test("プリセットアバターを選んでプロフィールアイコンにできる", async ({ page }) => {
     const user = await signUp(page);
     const marker = `アバター確認用 ${uniqueHandle()}`;
