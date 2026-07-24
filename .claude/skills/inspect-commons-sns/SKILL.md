@@ -25,7 +25,7 @@ Treat a pass here as "the server is producing the right HTML", never as "the UI 
 
 ## Setup
 
-Node 22+ (uses the built-in `node:sqlite`). Build the bundle this runs against — re-run after any app change:
+Node 22.13+ or 23.4+ — `node:sqlite` exists from 22.5 but needs `--experimental-sqlite` before those releases. Build the bundle this runs against — re-run after any app change:
 
 ```bash
 npm install --ignore-scripts   # the postinstall `wrangler types` hangs where workerd cannot run
@@ -40,11 +40,11 @@ Signs up a fresh user, posts, updates a profile, and reads each write back from 
 node .claude/skills/inspect-commons-sns/inspect.mjs flow
 ```
 
-```
+```text
 ok   ゲストのタイムラインが描画される — status 200
 ok   シードされた投稿が並ぶ — 4件
 ...
-13/13 passed
+17/17 passed
 ```
 
 Each line is a separate assertion; the command exits non-zero if any fail, so it can gate a change. A broken avatar branch, a loader that throws, a 500 on save — all surface here.

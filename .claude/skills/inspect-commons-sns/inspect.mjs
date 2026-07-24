@@ -74,10 +74,18 @@ async function loadHandler() {
   return module.default;
 }
 
+/**
+ * One database, one handler, and a factory for clients over them. Separate
+ * clients share the data but not the cookie jar, which is what lets a flow
+ * check that logging in actually establishes a session rather than inheriting
+ * the one signup already created.
+ */
 async function setup() {
   const db = createSqliteD1(MIGRATIONS);
   const handler = await loadHandler();
-  return { client: createClient(handler, { DB: db }), db };
+  const env = { DB: db };
+  const newClient = () => createClient(handler, env);
+  return { client: newClient(), newClient, db };
 }
 
 function uniqueUser() {
@@ -99,6 +107,14 @@ async function signUp(client, user = uniqueUser()) {
     throw new Error(`signup failed: expected a redirect, got ${response.status}\n${await response.text()}`);
   }
   return user;
+}
+
+/** Logs an existing account in on whichever client is passed. */
+async function logIn(client, user) {
+  return client.request("/?index", {
+    method: "POST",
+    form: { intent: "login", handle: user.handle, password: user.password },
+  });
 }
 
 async function render(path, { login, out }) {
@@ -131,7 +147,7 @@ async function render(path, { login, out }) {
  * app shows them.
  */
 async function flow() {
-  const { client, db } = await setup();
+  const { client, newClient, db } = await setup();
   const checks = [];
   const check = (name, passed, detail = "") => {
     checks.push({ name, passed, detail });
@@ -156,7 +172,9 @@ async function flow() {
   const home = await client.request("/");
   const homeHtml = await home.text();
   check("ログイン後のタイムラインに自分が出る", homeHtml.includes(user.displayName));
-  check("投稿フォームが出る", homeHtml.includes('class="composer"') || homeHtml.includes("composer"));
+  // 投稿フォームはログイン時だけ描かれ、ゲストには join-card が出る。
+  // 「認証済みかどうか」を判定できる唯一の目印なので、緩い一致にはしない。
+  check("投稿フォームが出る", homeHtml.includes('class="composer"') && !homeHtml.includes("join-card"));
 
   const body = `inspect flow ${new Date().toISOString()}`;
   const posted = await client.request("/?index", { method: "POST", form: { intent: "createPost", body } });
@@ -185,9 +203,68 @@ async function flow() {
   const missing = await client.request("/users/no_such_user_exists");
   check("存在しないユーザーは404", missing.status === 404, `status ${missing.status}`);
 
+  // 別のクライアント（＝別のクッキージャー）でログインし直す。サインアップで
+  // 得たセッションを使い回さないことで、ログイン自体の回帰を検出できる。
+  const returning = newClient();
+  const wrongPassword = await logIn(returning, { ...user, password: "definitely-wrong-password" });
+  check("誤ったパスワードではログインできない", !returning.cookieHeader, `status ${wrongPassword.status}`);
+
+  const loggedIn = await logIn(returning, user);
+  check("既存アカウントでログインできる", loggedIn.status === 302 && Boolean(returning.cookieHeader));
+
+  // 公開タイムラインは未ログインでも同じ投稿を返すため、投稿内容の一致だけでは
+  // ログインの成否を判定できない。ログイン時のみ出る composer で確かめる。
+  const asReturning = await returning.request("/");
+  const asReturningHtml = await asReturning.text();
+  check(
+    "ログイン後のセッションが認証済みとして描画される",
+    asReturningHtml.includes('class="composer"') && asReturningHtml.includes(renamed),
+  );
+
+  const loggedOut = newClient();
+  check(
+    "未ログインのクライアントは投稿できない",
+    !(
+      await loggedOut.request("/?index", {
+        method: "POST",
+        form: { intent: "createPost", body: "unauthenticated" },
+      })
+    ).ok,
+  );
+
   const failed = checks.filter((c) => !c.passed);
   console.log(`\n${checks.length - failed.length}/${checks.length} passed`);
   return failed.length === 0;
+}
+
+/**
+ * Parses `render` arguments strictly, so a misplaced flag fails loudly instead
+ * of silently rendering the wrong route or writing nothing.
+ *
+ * @returns The `render` argument tuple: `[path, options]`.
+ */
+function parseRenderArgs(argv) {
+  const options = { login: false, out: undefined };
+  const positional = [];
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (arg === "--login") {
+      options.login = true;
+    } else if (arg === "--out") {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith("--")) throw new Error("--out requires a file path");
+      options.out = value;
+      i += 1; // consume the value so it is not read as the route
+    } else if (arg.startsWith("--")) {
+      throw new Error(`unknown option: ${arg}`);
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  if (positional.length > 1) throw new Error(`expected one route, got ${positional.length}: ${positional.join(" ")}`);
+  return [positional[0] ?? "/", options];
 }
 
 async function main() {
@@ -195,12 +272,7 @@ async function main() {
 
   let passed;
   if (command === "render") {
-    const args = rest.filter((a) => !a.startsWith("--"));
-    const outIndex = rest.indexOf("--out");
-    passed = await render(args[0] ?? "/", {
-      login: rest.includes("--login"),
-      out: outIndex === -1 ? undefined : rest[outIndex + 1],
-    });
+    passed = await render(...parseRenderArgs(rest));
   } else if (command === "flow") {
     passed = await flow();
   } else {
