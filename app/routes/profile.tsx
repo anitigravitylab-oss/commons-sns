@@ -1,14 +1,27 @@
 import { CalendarDays, Check, Settings, Shuffle, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { data, Link, redirect, useFetcher, useLocation } from "react-router";
+import { data, Link, redirect, useFetcher, useLocation, useRevalidator } from "react-router";
 import type { Route } from "./+types/profile";
 import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
 import { presetAvatarKey } from "../lib/avatar-constraints";
 import { PRESET_AVATARS, PresetAvatarSymbol } from "../lib/avatar-presets";
+import {
+  cacheKeys,
+  canSkipRevalidation,
+  consumeBypass,
+  GUEST_OWNER,
+  markBypass,
+  readCachedView,
+  viewerHint,
+  writeCachedView,
+} from "../lib/client-cache";
 import { avatarClass, normalizeDate, PostSummaryCard, UserAvatar } from "../lib/post-presentation";
 import { getUserPosts, type TimelinePost } from "../lib/posts.server";
 import { BIO_MAX_LENGTH, DISPLAY_NAME_MAX_LENGTH, DISPLAY_NAME_MIN_LENGTH } from "../lib/profile-constraints";
+import { consumeToken, rateLimitResponseInit, RATE_LIMIT_MESSAGE } from "../lib/rate-limit.server";
+import type { RateLimitName } from "../lib/rate-limit.server";
+import { crossSiteRejection, readFormDataBounded } from "../lib/request-guard.server";
 import { SubpageShell } from "../lib/subpage";
 import { countCodePoints, sanitizeText, sliceCodePoints } from "../lib/text";
 import {
@@ -26,7 +39,31 @@ export function meta() {
   return [{ title: "プロフィール — Commons" }];
 }
 
+/** レートリミットを1つ消費し、超過していれば 429 応答を返す。通過時は null。 */
+function enforceLimit(name: RateLimitName, subject: string) {
+  const verdict = consumeToken(name, subject);
+  if (verdict.allowed) return null;
+  return data<ActionResult>({ error: RATE_LIMIT_MESSAGE }, rateLimitResponseInit(verdict));
+}
+
 const PROFILE_PAGE_SIZE = 20;
+
+/**
+ * プロフィール投稿一覧の最大ページ番号。
+ *
+ * SQLite の OFFSET は読み飛ばす行も実際に走査するため、上限が無いと URL の `page` を
+ * 大きくするだけで1リクエストの読み取り行数が「その著者の生存投稿数」まで伸びる。
+ * loader は GET なのでレートリミットも掛かっておらず、安価なリクエストで読み取り
+ * 負荷を増幅できてしまう。50 ページ = 最大 1,000 件で頭打ちにする。
+ */
+export const MAX_PROFILE_PAGE = 50;
+
+/** URL のページ番号を 1〜{@link MAX_PROFILE_PAGE} の整数に正規化する。 */
+function pageFromUrl(url: string) {
+  const requested = Number.parseInt(new URL(url).searchParams.get("page") ?? "1", 10);
+  if (!Number.isFinite(requested) || requested < 1) return 1;
+  return Math.min(requested, MAX_PROFILE_PAGE);
+}
 
 function handleFromParams(params: Route.LoaderArgs["params"]) {
   return String(params.handle ?? "")
@@ -42,8 +79,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   ]);
   if (!profile) throw data(null, { status: 404 });
 
-  const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
-  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const page = pageFromUrl(request.url);
 
   let posts: TimelinePost[] = [];
   let hasNextPage = false;
@@ -58,7 +94,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       user && user.id !== profile.id ? isFollowing(env, user.id, profile.id) : false,
     ]);
     posts = fetchedPosts.slice(0, PROFILE_PAGE_SIZE);
-    hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE;
+    // 上限ページでは「次へ」を出さない（出しても pageFromUrl が同じページへ丸める）。
+    hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE && page < MAX_PROFILE_PAGE;
     viewerFollows = following;
   } catch (error) {
     console.error("Failed to load profile posts", error);
@@ -76,6 +113,41 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   };
 }
 
+/** サーバーローダーが返す（シリアライズ済みの）プロフィールデータ。 */
+type ProfileData = Awaited<ReturnType<Route.ClientLoaderArgs["serverLoader"]>>;
+
+/**
+ * プロフィールを IndexedDB キャッシュ経由で読む（stale-while-revalidate）。
+ *
+ * 表示内容は閲覧者ごとに違う（フォロー状態・自分のプロフィールなど）ので、
+ * キーはハンドルとページ番号、所有者は閲覧者 ID で分ける。
+ */
+export async function clientLoader({ request, params, serverLoader }: Route.ClientLoaderArgs) {
+  const key = cacheKeys.profile(handleFromParams(params), pageFromUrl(request.url));
+
+  const fetchFresh = async () => {
+    const startedAt = Date.now();
+    // 存在しないハンドルではサーバーローダーが 404 を投げる。ここでは捕まえない。
+    const fresh = await serverLoader();
+    if (!fresh.postsError) await writeCachedView(key, fresh.user?.id ?? GUEST_OWNER, fresh, startedAt);
+    return { ...fresh, cacheState: "network" as const };
+  };
+
+  if (consumeBypass(key)) return fetchFresh();
+
+  const hint = viewerHint();
+  const cached = await readCachedView<ProfileData>(key, hint);
+  if (!cached) return fetchFresh();
+
+  // 未ログインの公開ページに限り再フェッチを省略する（理由は `canSkipRevalidation`）。
+  if (canSkipRevalidation(hint, cached.savedAt)) {
+    return { ...cached.payload, cacheState: "fresh-cache" as const };
+  }
+  markBypass(key);
+  return { ...cached.payload, cacheState: "stale-cache" as const };
+}
+clientLoader.hydrate = false;
+
 /**
  * Processes authenticated profile actions (edit, follow) for the profile
  * identified by the route handle.
@@ -84,6 +156,10 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
  * @throws A 404 response when the profile handle does not identify an existing profile.
  */
 export async function action({ request, context, params }: Route.ActionArgs) {
+  // クロスサイト送信と過大な本文は、セッションを引く前に落とす（`request-guard.server.ts`）。
+  const rejected = crossSiteRejection(request);
+  if (rejected) return rejected;
+
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/?auth=login");
@@ -91,16 +167,14 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   const profile = await getUserProfileByHandle(env, handleFromParams(params));
   if (!profile) throw data(null, { status: 404 });
 
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch (error) {
-    console.error("profile action formData failed", error);
-    return data<ActionResult>({ error: "問題が発生しました。時間をおいてもう一度お試しください。" }, { status: 500 });
-  }
+  const body = await readFormDataBounded(request);
+  if (!body.ok) return data<ActionResult>({ error: body.message }, { status: body.status });
+  const formData = body.formData;
   const intent = String(formData.get("intent") ?? "");
 
   if (intent === "toggleFollow") {
+    const limited = enforceLimit("follow", user.id);
+    if (limited) return limited;
     if (profile.id === user.id) {
       return data<ActionResult>({ error: "自分をフォローすることはできません。" }, { status: 400 });
     }
@@ -114,6 +188,8 @@ export async function action({ request, context, params }: Route.ActionArgs) {
   }
 
   if (intent === "updateProfile") {
+    const limited = enforceLimit("profile", user.id);
+    if (limited) return limited;
     if (profile.id !== user.id) {
       return data<ActionResult>({ error: "このプロフィールは編集できません。" }, { status: 403 });
     }
@@ -148,6 +224,11 @@ export async function action({ request, context, params }: Route.ActionArgs) {
 
 function joinedAt(value: string) {
   return new Intl.DateTimeFormat("ja-JP", { year: "numeric", month: "long" }).format(new Date(normalizeDate(value)));
+}
+
+/** フォロー一覧ページへのパス。ハンドルは URL に載るのでエスケープする。 */
+function followListTo(handle: string, kind: "following" | "followers") {
+  return `/users/${encodeURIComponent(handle)}/${kind}`;
 }
 
 function FollowButton({ following }: { following: boolean }) {
@@ -428,8 +509,15 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
   const isOwner = user?.id === profile.id;
   // ページ内リンクで router state (backTo) を引き継ぎ、戻り先のタブを保持する。
   const location = useLocation();
+  const revalidator = useRevalidator();
+  const cacheState = "cacheState" in loaderData ? loaderData.cacheState : undefined;
   const [editing, setEditing] = useState(false);
   const [savedNotice, setSavedNotice] = useState(false);
+
+  // 期限切れキャッシュを表示したときだけ、裏で最新を取り直す。
+  useEffect(() => {
+    if (cacheState === "stale-cache" && revalidator.state === "idle") void revalidator.revalidate();
+  }, [cacheState, revalidator]);
 
   useEffect(() => {
     if (!savedNotice) return;
@@ -486,12 +574,12 @@ export default function ProfilePage({ loaderData }: Route.ComponentProps) {
             <CalendarDays size={16} aria-hidden={true} /> {joinedAt(profile.createdAt)}からCommonsを利用
           </div>
           <div className="profile-follow-stats">
-            <span>
+            <Link to={followListTo(profile.handle, "following")} state={location.state}>
               <strong>{profile.followingCount}</strong> <span>フォロー中</span>
-            </span>
-            <span>
+            </Link>
+            <Link to={followListTo(profile.handle, "followers")} state={location.state}>
               <strong>{profile.followerCount}</strong> <span>フォロワー</span>
-            </span>
+            </Link>
           </div>
         </section>
 

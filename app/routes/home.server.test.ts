@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser, SESSION_COOKIE, verifyPassword } from "../lib/auth.server";
+import { consumeToken, RATE_LIMITS, resetRateLimits } from "../lib/rate-limit.server";
 import { brokenEnv, createPost, createTestApp, createUser, failingEnv, resetData, type TestApp } from "../testing/d1";
 import {
   expectData,
@@ -26,12 +27,20 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(app.env);
+  // レートリミットは isolate メモリに残るのでテスト間で持ち越さない。
+  resetRateLimits();
 });
 
 const URL_HOME = "http://test.local/?index";
 
 function callAction(request: Request, env = app.env) {
   return action(routeArgs(request, env, { pattern: "/" }));
+}
+
+/** `data()` の init から `Retry-After` を取り出す。 */
+function retryAfterOf(result: unknown): string | null {
+  const init = (result as { init?: ResponseInit | null }).init ?? null;
+  return new Headers(init?.headers).get("Retry-After");
 }
 
 function callLoader(request: Request, env = app.env) {
@@ -75,6 +84,23 @@ describe("home loader", () => {
       expect(result.user).toBeNull();
       expect(result.posts).toEqual([]);
       expect(result.timelineError).toBe(true);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("ブートストラップ設定中に D1 が落ちても、縮退表示のまま 500 にしない", async () => {
+    // 判定用のクエリを try の外に置くと、この経路が全画面 500（ルートの
+    // ErrorBoundary）に化ける。設定を有効にしただけで復旧可能な障害が
+    // 致命的な障害に変わってしまう。
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const env = { ...brokenEnv(), ADMIN_BOOTSTRAP_CODE: "launch-code" } as unknown as typeof app.env;
+      const result = await callLoader(getRequest("http://test.local/"), env);
+      expect(result.timelineError).toBe(true);
+      expect(result.posts).toEqual([]);
+      // 判定できないときは「欄を出さない」に倒す（成立済みでも出てしまうのを防ぐ）。
+      expect(result.adminBootstrapOpen).toBe(false);
     } finally {
       consoleError.mockRestore();
     }
@@ -405,6 +431,66 @@ describe("action envelope", () => {
     expect(data.error).toBe("不明な操作です。");
   });
 
+  it("別サイトからの送信は 403 で落とす（ログイン CSRF の遮断）", async () => {
+    const user = await createUser(app.env, { handle: "csrf_target", password: "correct horse battery" });
+    expect(user.id).toBeTruthy();
+
+    // 攻撃者のサイトから、攻撃者の資格情報で被害者をログインさせようとする送信。
+    const result = await callAction(
+      formRequest(
+        URL_HOME,
+        { intent: "login", handle: "csrf_target", password: "correct horse battery" },
+        { origin: "https://evil.example" },
+      ),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(403);
+    // セッションは張られない。
+    expect((result as Response).headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("Sec-Fetch-Site: cross-site も 403 で落とす", async () => {
+    const result = await callAction(formRequest(URL_HOME, { intent: "logout" }, { secFetchSite: "cross-site" }));
+
+    expect((result as Response).status).toBe(403);
+  });
+
+  it("同一 origin の送信と、ヘッダを持たない送信は通す", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+
+    // 同一 origin（ブラウザからの通常の送信）。
+    const sameOrigin = await callAction(
+      formRequest(URL_HOME, { intent: "createPost", body: "同一 origin" }, { cookie, origin: "http://test.local" }),
+    );
+    expect(expectData<ActionResult>(sameOrigin).data.ok).toBe(true);
+
+    // 判定材料が無い送信（テスト・curl・古いクライアント）はこれまでどおり通す。
+    const noHeaders = await callAction(formRequest(URL_HOME, { intent: "createPost", body: "ヘッダ無し" }, { cookie }));
+    expect(expectData<ActionResult>(noHeaders).data.ok).toBe(true);
+  });
+
+  it("本文が大きすぎる送信は読まずに 413", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    // 100MB を申告する（Cloudflare Free のリクエストボディ上限）。
+    const request = formRequest(
+      URL_HOME,
+      { intent: "createPost", body: "巨大" },
+      { cookie, contentLength: 100 * 1_024 * 1_024 },
+    );
+
+    const { data, status } = expectData<ActionResult>(await callAction(request));
+
+    expect(status).toBe(413);
+    expect(data.error).toBe("送信内容が大きすぎます。");
+    // formData() を呼ぶと本文が isolate のヒープへ載る。門番はその前に効いていなければ意味がない。
+    expect(request.bodyUsed).toBe(false);
+    const posts = await app.env.DB.prepare("SELECT COUNT(*) AS n FROM posts").first<{ n: number }>();
+    expect(posts?.n).toBe(0);
+  });
+
   it("returns a friendly 500 when the body is not form data", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -431,5 +517,182 @@ describe("action envelope", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("invite code", () => {
+  const signupFields = { intent: "signup", handle: "invited", displayName: "招待", password: "password123" };
+  /** INVITE_CODE を設定した env。シークレットなので `vars` ではなく実行時に生える。 */
+  const gatedEnv = () => ({ ...app.env, INVITE_CODE: "  open-sesame  " });
+
+  it("tells the client whether the signup form needs an invite field", async () => {
+    expect((await callLoader(getRequest("http://test.local/"))).inviteRequired).toBe(false);
+    expect((await callLoader(getRequest("http://test.local/"), gatedEnv())).inviteRequired).toBe(true);
+  });
+
+  it("rejects a missing or wrong code with 403 while the gate is on", async () => {
+    for (const inviteCode of ["", "wrong-code", "Open-Sesame"]) {
+      const result = await callAction(formRequest(URL_HOME, { ...signupFields, inviteCode }), gatedEnv());
+      const { data, status } = expectData<ActionResult>(result);
+      expect(status).toBe(403);
+      expect(data.form).toBe("signup");
+      expect(data.error).toBe("招待コードが正しくありません。");
+    }
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
+    expect(row?.total).toBe(0);
+  });
+
+  it("creates the account when the code matches, ignoring surrounding whitespace", async () => {
+    const result = await callAction(
+      formRequest(URL_HOME, { ...signupFields, inviteCode: " open-sesame " }),
+      gatedEnv(),
+    );
+    expect(expectRedirect(result).location).toBe("/");
+  });
+
+  it("ignores the field entirely while the gate is off", async () => {
+    const result = await callAction(formRequest(URL_HOME, { ...signupFields, inviteCode: "nonsense" }));
+    expect(expectRedirect(result).location).toBe("/");
+  });
+});
+
+describe("初期管理者ブートストラップ（ADMIN_BOOTSTRAP_CODE）", () => {
+  const fields = { intent: "signup", handle: "founder", displayName: "運営", password: "password123" };
+  /** ブートストラップコードを設定した env。シークレットなので実行時にだけ生える。 */
+  const bootstrapEnv = () => ({ ...app.env, ADMIN_BOOTSTRAP_CODE: "  launch-code  " }) as unknown as typeof app.env;
+
+  it("コードが未設定なら、誰も admin に昇格しない", async () => {
+    // 【重要】ハンドル名では認可しない。設定ファイルに書く値は公開リポジトリに載り
+    // 推測もできるため、「特定のハンドルで登録した人を admin にする」方式では
+    // 運営者より先に第三者が名乗るだけでインスタンスを乗っ取れてしまう。
+    expect((await callLoader(getRequest("http://test.local/"))).adminBootstrapOpen).toBe(false);
+
+    const result = await callAction(formRequest(URL_HOME, { ...fields, adminBootstrapCode: "anything" }));
+    expect(expectData<ActionResult>(result).status).toBe(403);
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+    expect(row?.n).toBe(0);
+  });
+
+  it("正しいコードを提示した最初の登録だけが admin になる", async () => {
+    expect((await callLoader(getRequest("http://test.local/"), bootstrapEnv())).adminBootstrapOpen).toBe(true);
+
+    const result = await callAction(
+      formRequest(URL_HOME, { ...fields, adminBootstrapCode: " launch-code " }),
+      bootstrapEnv(),
+    );
+    expect(expectRedirect(result).location).toBe("/");
+    const row = await app.env.DB.prepare("SELECT role FROM users WHERE handle = 'founder'").first<{ role: string }>();
+    expect(row?.role).toBe("admin");
+
+    // 成立後は入力欄そのものが消え、同じコードでも2人目は昇格しない。
+    expect((await callLoader(getRequest("http://test.local/"), bootstrapEnv())).adminBootstrapOpen).toBe(false);
+    await callAction(
+      formRequest(URL_HOME, { ...fields, handle: "second", adminBootstrapCode: "launch-code" }),
+      bootstrapEnv(),
+    );
+    const second = await app.env.DB.prepare("SELECT role FROM users WHERE handle = 'second'").first<{ role: string }>();
+    expect(second?.role).toBe("user");
+  });
+
+  it("コード欄が空の通常の登録は、これまでどおり一般利用者になる", async () => {
+    const result = await callAction(formRequest(URL_HOME, fields), bootstrapEnv());
+    expect(expectRedirect(result).location).toBe("/");
+    const row = await app.env.DB.prepare("SELECT role FROM users WHERE handle = 'founder'").first<{ role: string }>();
+    expect(row?.role).toBe("user");
+  });
+
+  it("誤ったコードは 403 で弾き、アカウントも作らない", async () => {
+    for (const adminBootstrapCode of ["wrong", "Launch-Code"]) {
+      const result = await callAction(formRequest(URL_HOME, { ...fields, adminBootstrapCode }), bootstrapEnv());
+      const { data, status } = expectData<ActionResult>(result);
+      expect(status).toBe(403);
+      expect(data.error).toBe("管理者コードが正しくありません。");
+    }
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+    expect(row?.n).toBe(0);
+  });
+
+  it("パスワード無しのシード admin は成立済みとみなさない", async () => {
+    // シードの公式アカウントは admin だがログインできないので、ブートストラップは開いたまま。
+    await createUser(app.env, { handle: "seed_admin", role: "admin", password: null });
+
+    expect((await callLoader(getRequest("http://test.local/"), bootstrapEnv())).adminBootstrapOpen).toBe(true);
+    await callAction(formRequest(URL_HOME, { ...fields, adminBootstrapCode: "launch-code" }), bootstrapEnv());
+    const row = await app.env.DB.prepare("SELECT role FROM users WHERE handle = 'founder'").first<{ role: string }>();
+    expect(row?.role).toBe("admin");
+  });
+
+  it("予約語ハンドルはブートストラップでも免除しない", async () => {
+    const result = await callAction(
+      formRequest(URL_HOME, { ...fields, handle: "admin", adminBootstrapCode: "launch-code" }),
+      bootstrapEnv(),
+    );
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(400);
+    expect(data.error).toBe("このIDは使用できません。");
+  });
+});
+
+describe("rate limits", () => {
+  const signupFields = { intent: "signup", displayName: "新人", password: "password123" };
+
+  it("stops a burst of signups from one client with 429 and Retry-After", async () => {
+    for (let index = 0; index < RATE_LIMITS.signup.capacity; index += 1) {
+      const allowed = await callAction(formRequest(URL_HOME, { ...signupFields, handle: `newcomer${index}` }));
+      expect(expectRedirect(allowed).location).toBe("/");
+    }
+
+    const blocked = await callAction(formRequest(URL_HOME, { ...signupFields, handle: "newcomer_last" }));
+    const { data, status } = expectData<ActionResult>(blocked);
+    expect(status).toBe(429);
+    expect(data.form).toBe("signup");
+    expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+    expect(Number(retryAfterOf(blocked))).toBeGreaterThan(0);
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
+    expect(row?.total).toBe(RATE_LIMITS.signup.capacity);
+  });
+
+  it("stops brute-forced logins before the password is verified", async () => {
+    await createUser(app.env, { handle: "member", password: "secret pass 9" });
+    for (let index = 0; index < RATE_LIMITS.login.capacity; index += 1) consumeToken("login", "unknown");
+
+    const result = await callAction(
+      formRequest(URL_HOME, { intent: "login", handle: "member", password: "secret pass 9" }),
+    );
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(429);
+    expect(data.form).toBe("login");
+    expect(retryAfterOf(result)).not.toBeNull();
+  });
+
+  it("stops a flood of posts from one account", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    for (let index = 0; index < RATE_LIMITS.post.capacity; index += 1) consumeToken("post", user.id);
+
+    const result = await callAction(formRequest(URL_HOME, { intent: "createPost", body: "連投" }, { cookie }));
+    expect(expectData<ActionResult>(result).status).toBe(429);
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS total FROM posts").first<{ total: number }>();
+    expect(row?.total).toBe(0);
+  });
+
+  it("shares one bucket between reactions and deletions", async () => {
+    const user = await createUser(app.env);
+    const post = await createPost(app.env, { authorId: user.id });
+    const cookie = await loginCookie(app.env, user.id);
+    for (let index = 0; index < RATE_LIMITS.reaction.capacity; index += 1) consumeToken("reaction", user.id);
+
+    const reaction = await callAction(
+      formRequest(URL_HOME, { intent: "toggleReaction", postId: post.id, kind: "like" }, { cookie }),
+    );
+    expect(expectData<ActionResult>(reaction).status).toBe(429);
+
+    const deletion = await callAction(formRequest(URL_HOME, { intent: "deletePost", postId: post.id }, { cookie }));
+    expect(expectData<ActionResult>(deletion).status).toBe(429);
+
+    const row = await app.env.DB.prepare("SELECT deleted_at FROM posts WHERE id = ?")
+      .bind(post.id)
+      .first<{ deleted_at: string | null }>();
+    expect(row?.deleted_at).toBeNull();
   });
 });

@@ -35,10 +35,31 @@ import {
   verifyPasswordOrDummy,
 } from "../lib/auth.server";
 import type { SessionUser } from "../lib/auth.server";
-import { avatarAppearance, PostIdentity, UserAvatar } from "../lib/post-presentation";
+import {
+  cacheKeys,
+  canSkipRevalidation,
+  clearCache,
+  consumeBypass,
+  GUEST_OWNER,
+  markBypass,
+  readCachedView,
+  viewerHint,
+  writeCachedView,
+} from "../lib/client-cache";
+import {
+  isAdminBootstrapConfigured,
+  isInviteRequired,
+  verifyAdminBootstrapCode,
+  verifyInviteCode,
+} from "../lib/invite.server";
+import { avatarAppearance, PostBody, PostIdentity, UserAvatar } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
 import type { TimelinePost, TimelineScope } from "../lib/posts.server";
+import { clientKey, consumeToken, rateLimitResponseInit, RATE_LIMIT_MESSAGE } from "../lib/rate-limit.server";
+import type { RateLimitName } from "../lib/rate-limit.server";
+import { crossSiteRejection, readFormDataBounded } from "../lib/request-guard.server";
 import { countCodePoints, isReservedHandle, sanitizeText } from "../lib/text";
+import { createUserAccount, hasLoginCapableAdmin } from "../lib/users.server";
 
 type ActionResult = {
   ok?: boolean;
@@ -71,13 +92,68 @@ export async function loader({ request, context }: Route.LoaderArgs) {
     envValue: env.COMMONS_LOCAL_AUTO_RELOAD_MS,
     queryValue: url.searchParams.get("autoReloadMs"),
   });
+  // INVITE_CODE が設定されている間だけ、登録フォームに招待コード欄を出す。
+  const inviteRequired = isInviteRequired(env);
+
+  // 【重要】D1 を触る処理はすべて try の中で行う。外に出すと、D1 が落ちたときに
+  // 「タイムラインだけ空で他は表示する」縮退経路を飛び越えて全画面 500 になる。
+  let posts: TimelinePost[] = [];
+  let timelineError = false;
+  // ブートストラップが「まだ開いている」ときだけ管理者コード欄を出す。
+  // 判定できないときは false（欄を出さない）に倒す — 出してしまうと、D1 障害中に
+  // 成立済みのインスタンスでも欄が現れる。実際の昇格は INSERT 側が判定するので、
+  // ここで false になっても正当な運営者は復旧後にやり直せる。
+  let adminBootstrapOpen = false;
   try {
-    return { user, tab, posts: await getTimeline(env, user?.id ?? null, tab), timelineError: false, autoReloadMs };
+    // コード未設定のインスタンス（既定）では追加クエリを撃たない。
+    adminBootstrapOpen = isAdminBootstrapConfigured(env) && !(await hasLoginCapableAdmin(env));
+    posts = await getTimeline(env, user?.id ?? null, tab);
   } catch (error) {
-    console.error("getTimeline failed", error);
-    return { user, tab, posts: [] as TimelinePost[], timelineError: true, autoReloadMs };
+    console.error("home loader failed", error);
+    timelineError = true;
   }
+  return { user, tab, posts, timelineError, autoReloadMs, inviteRequired, adminBootstrapOpen };
 }
+
+/** サーバーローダーが返す（シリアライズ済みの）タイムラインデータ。 */
+type TimelineData = Awaited<ReturnType<Route.ClientLoaderArgs["serverLoader"]>>;
+
+/**
+ * タイムラインを IndexedDB キャッシュ経由で読む（stale-while-revalidate）。
+ *
+ * 初回の SSR では動かない（`clientLoader.hydrate = false`）ので、サーバー描画の挙動は変わらない。
+ * クライアント遷移では、鮮度ウィンドウ内ならサーバーへ行かずに即時表示し、
+ * 古いレコードはいったん表示してから裏で再検証する（再検証はコンポーネント側の effect が起動する）。
+ */
+export async function clientLoader({ request, serverLoader }: Route.ClientLoaderArgs) {
+  const requestedTab = new URL(request.url).searchParams.get("tab");
+  const key = cacheKeys.timeline(requestedTab === "following" ? "following" : "recommended");
+
+  const fetchFresh = async () => {
+    const startedAt = Date.now();
+    const fresh = await serverLoader();
+    // 読み込みに失敗した応答は保存しない（次回も必ずサーバーへ行かせる）。
+    if (!fresh.timelineError) await writeCachedView(key, fresh.user?.id ?? GUEST_OWNER, fresh, startedAt);
+    return { ...fresh, cacheState: "network" as const };
+  };
+
+  // 直前に stale を返した再検証パスは必ずサーバーへ行く。
+  if (consumeBypass(key)) return fetchFresh();
+
+  const hint = viewerHint();
+  const cached = await readCachedView<TimelineData>(key, hint);
+  if (!cached) return fetchFresh();
+
+  // 未ログインの公開ページに限り、鮮度ウィンドウ内は再フェッチ自体を省略する。
+  // ログイン中は必ず再検証する（理由は `canSkipRevalidation`）。
+  if (canSkipRevalidation(hint, cached.savedAt)) {
+    return { ...cached.payload, cacheState: "fresh-cache" as const };
+  }
+  // 即時表示して、直後に再検証する。
+  markBypass(key);
+  return { ...cached.payload, cacheState: "stale-cache" as const };
+}
+clientLoader.hydrate = false;
 
 function formText(formData: FormData, key: string) {
   return String(formData.get(key) ?? "").trim();
@@ -88,21 +164,34 @@ const fail = (error: string, status: number, form?: ActionResult["form"]) =>
 
 const ok = () => data<ActionResult>({ ok: true });
 
+/**
+ * レートリミットを1つ消費し、超過していれば 429 応答を返す。通過時は null。
+ * 呼び出し側は `const limited = enforceLimit(...); if (limited) return limited;` と書く。
+ */
+function enforceLimit(name: RateLimitName, subject: string, form?: ActionResult["form"]) {
+  const verdict = consumeToken(name, subject);
+  if (verdict.allowed) return null;
+  return data<ActionResult>({ error: RATE_LIMIT_MESSAGE, ...(form ? { form } : {}) }, rateLimitResponseInit(verdict));
+}
+
 export async function action({ request, context }: Route.ActionArgs) {
+  // 【必須】ログイン・登録もこの action にぶら下がっているので、クロスサイト送信は
+  // 何よりも先に落とす。攻撃者の資格情報で被害者のブラウザにログインさせる
+  // 「ログイン CSRF」は Cookie が無くても成立し、SameSite では防げない
+  // （`request-guard.server.ts`）。
+  const rejected = crossSiteRejection(request);
+  if (rejected) return rejected;
+
   const { env, ctx } = context.get(cloudflareContext);
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch (error) {
-    console.error("action formData failed", error);
-    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
-  }
+  const body = await readFormDataBounded(request);
+  if (!body.ok) return fail(body.message, body.status);
+  const formData = body.formData;
   const intent = formText(formData, "intent");
   const authForm = intent === "signup" ? "signup" : intent === "login" ? "login" : undefined;
 
   try {
-    if (intent === "signup") return await handleSignup(env, ctx, formData);
-    if (intent === "login") return await handleLogin(env, ctx, formData);
+    if (intent === "signup") return await handleSignup(env, ctx, formData, request);
+    if (intent === "login") return await handleLogin(env, ctx, formData, request);
     if (intent === "logout") return await handleLogout(env, request);
 
     const user = await getSessionUser(request, env);
@@ -119,13 +208,23 @@ export async function action({ request, context }: Route.ActionArgs) {
   return fail("不明な操作です。", 400);
 }
 
-async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
+async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
+  // 登録は IP 単位で絞る。バケツは isolate ローカルなので、分散した攻撃までは
+  // 止まらない（`rate-limit.server.ts` の冒頭コメントを参照）。
+  // 招待コードの総当たりもこの枠で遅くなる。
+  const limited = enforceLimit("signup", clientKey(request), "signup");
+  if (limited) return limited;
+  if (!verifyInviteCode(env, formText(formData, "inviteCode"))) {
+    return fail("招待コードが正しくありません。", 403, "signup");
+  }
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const displayName = sanitizeText(formText(formData, "displayName"));
   const password = String(formData.get("password") ?? "");
   if (!/^[a-z0-9_]{3,20}$/.test(handle)) {
     return fail("IDは3〜20文字の半角英数字と_で入力してください。", 400, "signup");
   }
+  // 予約語はなりすまし防止のためのもの。ブートストラップでも免除しない
+  // （管理者は role で示され、公式バッジもロール判定なので、特定のハンドル名は要らない）。
   if (isReservedHandle(handle)) {
     return fail("このIDは使用できません。", 400, "signup");
   }
@@ -136,27 +235,42 @@ async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormDa
   if (password.length < 8 || password.length > 128) {
     return fail("パスワードは8〜128文字で入力してください。", 400, "signup");
   }
-  const userId = crypto.randomUUID();
+  // 初期管理者への昇格は、シークレットの ADMIN_BOOTSTRAP_CODE を提示した登録だけ。
+  // 空欄の通常の登録は当然ながら昇格しない（`verifyAdminBootstrapCode` は
+  // 未設定インスタンスでも常に false を返す）。
+  const bootstrapCode = formText(formData, "adminBootstrapCode");
+  const promoteToAdmin = bootstrapCode.length > 0 && verifyAdminBootstrapCode(env, bootstrapCode);
+  if (bootstrapCode.length > 0 && !promoteToAdmin) {
+    return fail("管理者コードが正しくありません。", 403, "signup");
+  }
   const { hash, salt } = await hashPassword(password);
+  let created;
   try {
-    await env.DB.prepare(
-      `INSERT INTO users (id, handle, display_name, password_hash, password_salt)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-      .bind(userId, handle, displayName, hash, salt)
-      .run();
+    created = await createUserAccount(env, {
+      handle,
+      displayName,
+      passwordHash: hash,
+      passwordSalt: salt,
+      // ログインできる admin がまだ居ないインスタンスでのみ、実際に昇格する
+      // （判定は INSERT と同じ文の中で行われる）。
+      promoteToAdmin,
+    });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/UNIQUE|constraint/i.test(message)) {
-      return fail("そのIDはすでに使われています。", 409, "signup");
-    }
     console.error("handleSignup insert failed", error);
     return fail("登録できませんでした。時間をおいてもう一度お試しください。", 500, "signup");
   }
-  return redirect("/", { headers: { "Set-Cookie": await createSession(env, userId, ctx) } });
+  if (!created.ok) {
+    return fail("そのIDはすでに使われています。", 409, "signup");
+  }
+  return redirect("/", { headers: { "Set-Cookie": await createSession(env, created.userId, ctx) } });
 }
 
-async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
+async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
+  // 総当たり対策。PBKDF2 の検証は CPU を使うので、消費する前に判定する。
+  // 主体は IP のみ。対象アカウント単位の枠を設けない理由は `rate-limit.server.ts` を参照
+  // （試行時点で消費する口座単位の枠は、他人が正規の持ち主を締め出す道具になる）。
+  const limited = enforceLimit("login", clientKey(request), "login");
+  if (limited) return limited;
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
   if (password.length < 8 || password.length > 128) {
@@ -175,6 +289,8 @@ async function handleLogout(env: AppEnv, request: Request) {
 }
 
 async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUser) {
+  const limited = enforceLimit("post", user.id);
+  if (limited) return limited;
   const clean = sanitizeText(formText(formData, "body"), { multiline: true });
   if (!clean || countCodePoints(clean, POST_MAX_LENGTH) > POST_MAX_LENGTH) {
     return fail(`投稿は1〜${POST_MAX_LENGTH}文字で入力してください。`, 400);
@@ -186,6 +302,8 @@ async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUs
 }
 
 async function handleToggleReaction(env: AppEnv, formData: FormData, user: SessionUser) {
+  const limited = enforceLimit("reaction", user.id);
+  if (limited) return limited;
   const postId = formText(formData, "postId");
   const kind = formText(formData, "kind");
   if (!postId || !["like", "repost", "bookmark"].includes(kind)) {
@@ -209,6 +327,9 @@ async function handleToggleReaction(env: AppEnv, formData: FormData, user: Sessi
 }
 
 async function handleDeletePost(env: AppEnv, formData: FormData, user: SessionUser) {
+  // 削除は連打されても実害が薄いので、リアクションと同じ緩い枠を共有する。
+  const limited = enforceLimit("reaction", user.id);
+  if (limited) return limited;
   const postId = formText(formData, "postId");
   await env.DB.prepare(
     "UPDATE posts SET deleted_at = datetime('now') WHERE id = ? AND author_id = ? AND deleted_at IS NULL",
@@ -278,17 +399,23 @@ function IntentForm({ intent, fields, fetcher, children, ...formProps }: IntentF
  *
  * @param mode - The authentication mode to display.
  * @param error - An optional error message shown in the form.
+ * @param inviteRequired - Whether the instance requires an invite code to sign up.
+ * @param adminBootstrapOpen - Whether the initial-admin bootstrap is still open.
  * @param onClose - Called when the modal is dismissed.
  * @param onChange - Called when the user switches authentication modes.
  */
 function AuthModal({
   mode,
   error,
+  inviteRequired,
+  adminBootstrapOpen,
   onClose,
   onChange,
 }: {
   mode: "login" | "signup";
   error?: string;
+  inviteRequired: boolean;
+  adminBootstrapOpen: boolean;
   onClose: () => void;
   onChange: (mode: "login" | "signup") => void;
 }) {
@@ -340,6 +467,24 @@ function AuthModal({
         <h2 id="auth-title">{mode === "login" ? "Commonsにログイン" : "Commonsをはじめる"}</h2>
         <p>{mode === "login" ? "おかえりなさい。" : "メールアドレスなしですぐに登録できます。"}</p>
         <IntentForm intent={mode} className="auth-form">
+          {mode === "signup" && inviteRequired && (
+            <label>
+              招待コード
+              <input name="inviteCode" required autoComplete="off" placeholder="オーナーから受け取ったコード" />
+            </label>
+          )}
+          {mode === "signup" && adminBootstrapOpen && (
+            <label>
+              管理者コード（任意）
+              {/* 高権限のシークレットなので伏せ字にする（画面共有・録画・肩越しの覗き見対策）。 */}
+              <input
+                name="adminBootstrapCode"
+                type="password"
+                autoComplete="off"
+                placeholder="このインスタンスの管理者になる場合のみ"
+              />
+            </label>
+          )}
           {mode === "signup" && (
             <label>
               表示名
@@ -494,7 +639,7 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
       <UserAvatar name={post.name} handle={post.handle} avatarKey={post.avatarKey} />
       <div className="post-content">
         <header>
-          <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
+          <PostIdentity name={post.name} handle={post.handle} authorRole={post.role} createdAt={post.createdAt} />
           {user?.id === post.authorId ? (
             <IntentForm fetcher={deleteFetcher} intent="deletePost" fields={{ postId: post.id }}>
               <button type="submit" disabled={deleteFetcher.state !== "idle"} aria-label="投稿を削除">
@@ -507,7 +652,7 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
             </button>
           )}
         </header>
-        <p>{post.body}</p>
+        <PostBody body={post.body} />
         <footer className="post-actions">
           <button onClick={user ? undefined : onRequireLogin} aria-label="返信" title="返信機能は準備中です">
             <span>
@@ -525,7 +670,7 @@ function PostCard({ post, user, onRequireLogin }: PostChildProps) {
 }
 
 export default function HomePage({ loaderData, actionData }: Route.ComponentProps) {
-  const { user, posts, tab, timelineError, autoReloadMs } = loaderData;
+  const { user, posts, tab, timelineError, autoReloadMs, inviteRequired, adminBootstrapOpen } = loaderData;
   const mobileAvatar = user
     ? avatarAppearance({ name: user.displayName, handle: user.handle, avatarKey: user.avatarKey })
     : null;
@@ -538,6 +683,13 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
     authParam === "login" || authParam === "signup" ? authParam : null,
   );
   const [dismissedError, setDismissedError] = useState(false);
+  // SSR ハイドレーション時は clientLoader が動かないので undefined になりうる。
+  const cacheState = "cacheState" in loaderData ? loaderData.cacheState : undefined;
+
+  // 期限切れキャッシュを表示したときだけ、裏で最新を取り直す（stale-while-revalidate）。
+  useEffect(() => {
+    if (cacheState === "stale-cache" && revalidator.state === "idle") void revalidator.revalidate();
+  }, [cacheState, revalidator]);
 
   // A new action response may carry a fresh auth error; let it show again.
   useEffect(() => {
@@ -666,7 +818,8 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
                 <strong>{user.displayName}</strong>
                 <small>@{user.handle}</small>
               </span>
-              <IntentForm intent="logout">
+              {/* ログアウト時は端末に残したキャッシュも消す。 */}
+              <IntentForm intent="logout" onSubmit={() => void clearCache()}>
                 <button className="icon-button" type="submit" aria-label="ログアウト">
                   <LogOut size={17} />
                 </button>
@@ -850,6 +1003,8 @@ export default function HomePage({ loaderData, actionData }: Route.ComponentProp
         <AuthModal
           mode={visibleAuthMode}
           error={!dismissedError && actionData?.form === visibleAuthMode ? actionData.error : undefined}
+          inviteRequired={inviteRequired}
+          adminBootstrapOpen={adminBootstrapOpen}
           onClose={closeAuth}
           onChange={openAuth}
         />

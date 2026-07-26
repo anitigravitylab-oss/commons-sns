@@ -30,10 +30,8 @@ test.describe("フォロー", () => {
 
     // シードユーザー aoi_note のフォロワー数を基準として控えておく。
     await gotoApp(page, "/users/aoi_note");
-    const followerCount = page
-      .locator(".profile-follow-stats > span")
-      .filter({ hasText: "フォロワー" })
-      .locator("strong");
+    // 数字はフォロワー一覧へのリンクになっている（`follow-list.spec.ts` を参照）。
+    const followerCount = page.locator(".profile-follow-stats a").filter({ hasText: "フォロワー" }).locator("strong");
     const before = Number(await followerCount.innerText());
 
     // フォローすると、リロード後も維持されフォロワー数が増える。

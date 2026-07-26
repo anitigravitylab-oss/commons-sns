@@ -1,5 +1,23 @@
+# ローカル開発用の環境変数のひな形。
+# このファイルをコピーして .dev.vars を作成してください（.dev.vars は git 管理外）。
+#
+#   cp .dev.vars.example .dev.vars
+
 # ローカル開発時のタイムライン自動更新間隔（ミリ秒）・dev 限定の暫定機能。
 # 0 で無効化、500〜60000ms にクランプ。未設定時は 2000ms。
-# このファイルをコピーして .dev.vars を作成してください（.dev.vars は git 管理外）。
 # URL クエリ ?autoReloadMs=0 でも一時的に無効化できます。
 COMMONS_LOCAL_AUTO_RELOAD_MS=2000
+
+# 招待コード。設定されている間だけ、新規登録に入力が必要になります。
+# 本番では `npx wrangler secret put INVITE_CODE` で設定してください。
+# シークレットなので wrangler.jsonc には書きません。
+# 未設定・空文字なら誰でも登録できます。
+# INVITE_CODE=change-me
+
+# 初期管理者のブートストラップコード。設定すると、登録フォームに「管理者コード」欄が
+# 現れ、このコードを提示して登録した最初のアカウントが admin になります。
+# 一度 admin ができると欄は消え、以後このコードでは昇格しません。
+# 本番では `npx wrangler secret put ADMIN_BOOTSTRAP_CODE` で設定してください。
+# シークレットなので wrangler.jsonc には書きません（設定ファイルに書く値は
+# 公開リポジトリに載り、推測もできるため、権限の根拠にできません）。
+# ADMIN_BOOTSTRAP_CODE=change-me

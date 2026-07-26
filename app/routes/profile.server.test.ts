@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeToken, RATE_LIMITS, resetRateLimits } from "../lib/rate-limit.server";
 import { isFollowing } from "../lib/users.server";
 import { addFollow, createPost, createTestApp, createUser, failingEnv, resetData, type TestApp } from "../testing/d1";
 import {
@@ -10,7 +11,7 @@ import {
   malformedFormRequest,
   routeArgs,
 } from "../testing/requests";
-import { action, loader } from "./profile";
+import { action, loader, MAX_PROFILE_PAGE } from "./profile";
 
 type ActionResult = { ok?: boolean; error?: string };
 
@@ -26,6 +27,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(app.env);
+  // レートリミットは isolate メモリに残るのでテスト間で持ち越さない。
+  resetRateLimits();
 });
 
 function callLoader(url: string, handle: string, cookie?: string, env = app.env) {
@@ -98,6 +101,37 @@ describe("profile loader", () => {
     }
   });
 
+  it("caps the page number so OFFSET cannot be driven arbitrarily deep", async () => {
+    // OFFSET は読み飛ばす行も実際に走査されるため、上限が無いと `?page=99999` を並べるだけで
+    // 読み取り負荷を際限なく増幅できる（loader は GET なのでレートリミットも掛からない）。
+    const user = await createUser(app.env, { handle: "capped" });
+    await createPost(app.env, { authorId: user.id });
+
+    for (const query of [`?page=${MAX_PROFILE_PAGE + 1}`, "?page=99999", "?page=9007199254740993"]) {
+      const result = await callLoader(`http://test.local/users/capped${query}`, "capped");
+      expect(result.page).toBe(MAX_PROFILE_PAGE);
+      expect(result.hasNextPage).toBe(false);
+    }
+  });
+
+  it("stops offering a next page once the cap is reached", async () => {
+    const user = await createUser(app.env, { handle: "deep" });
+    // 上限ページを埋めきる件数は用意せず、上限ページで打ち切られることだけを確かめる。
+    for (let index = 0; index < 21; index += 1) {
+      await createPost(app.env, {
+        id: `deep_${String(index).padStart(2, "0")}`,
+        authorId: user.id,
+        createdAt: `2026-06-01 10:${String(index).padStart(2, "0")}:00`,
+      });
+    }
+
+    const first = await callLoader("http://test.local/users/deep", "deep");
+    expect(first.hasNextPage).toBe(true);
+
+    const capped = await callLoader(`http://test.local/users/deep?page=${MAX_PROFILE_PAGE}`, "deep");
+    expect(capped.hasNextPage).toBe(false);
+  });
+
   it("reports whether the viewer follows the profile", async () => {
     const owner = await createUser(app.env, { handle: "owner" });
     const follower = await createUser(app.env);
@@ -158,6 +192,44 @@ describe("profile action", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("別サイトからの送信は 403（勝手なフォロー・プロフィール書き換えを防ぐ）", async () => {
+    await createUser(app.env, { handle: "target" });
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+
+    const result = await action(
+      routeArgs(
+        formRequest(
+          "http://test.local/users/target",
+          { intent: "toggleFollow" },
+          { cookie, origin: "https://evil.example" },
+        ),
+        app.env,
+        { pattern: "/users/:handle", params: { handle: "target" } },
+      ),
+    );
+
+    expect((result as Response).status).toBe(403);
+    const follows = await app.env.DB.prepare("SELECT COUNT(*) AS n FROM follows").first<{ n: number }>();
+    expect(follows?.n).toBe(0);
+  });
+
+  it("本文が大きすぎる送信は読まずに 413", async () => {
+    await createUser(app.env, { handle: "target" });
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+
+    const result = await action(
+      routeArgs(
+        formRequest("http://test.local/users/target", { intent: "toggleFollow" }, { cookie, contentLength: 1_048_576 }),
+        app.env,
+        { pattern: "/users/:handle", params: { handle: "target" } },
+      ),
+    );
+
+    expect(expectData<ActionResult>(result).status).toBe(413);
   });
 
   it("rejects unknown intents", async () => {
@@ -332,5 +404,34 @@ describe("profile action", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("profile rate limits", () => {
+  it("stops a burst of follow toggles with 429", async () => {
+    const viewer = await createUser(app.env);
+    const target = await createUser(app.env, { handle: "target" });
+    const cookie = await loginCookie(app.env, viewer.id);
+    for (let index = 0; index < RATE_LIMITS.follow.capacity; index += 1) consumeToken("follow", viewer.id);
+
+    const result = await callAction("target", { intent: "toggleFollow" }, cookie);
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(429);
+    expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+    expect(await isFollowing(app.env, viewer.id, target.id)).toBe(false);
+  });
+
+  it("stops a burst of profile edits with 429", async () => {
+    const user = await createUser(app.env, { handle: "editor", displayName: "編集者" });
+    const cookie = await loginCookie(app.env, user.id);
+    for (let index = 0; index < RATE_LIMITS.profile.capacity; index += 1) consumeToken("profile", user.id);
+
+    const result = await callAction("editor", { intent: "updateProfile", displayName: "別名", bio: "" }, cookie);
+    expect(expectData<ActionResult>(result).status).toBe(429);
+
+    const row = await app.env.DB.prepare("SELECT display_name FROM users WHERE id = ?")
+      .bind(user.id)
+      .first<{ display_name: string }>();
+    expect(row?.display_name).toBe("編集者");
   });
 });

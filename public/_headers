@@ -1,0 +1,4 @@
+# Vite が出力するハッシュ付きアセットは内容が変われば名前も変わるので、
+# 長期キャッシュしてよい。再訪問時のアセット取得が不要になる。
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

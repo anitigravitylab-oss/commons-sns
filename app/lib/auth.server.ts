@@ -1,4 +1,5 @@
 import type { AppEnv } from "../cloudflare";
+import { constantTimeEquals } from "./constant-time";
 
 export const SESSION_COOKIE = "commons_session";
 const SESSION_DAYS = 30;
@@ -47,15 +48,6 @@ async function derivePassword(password: string, saltHex: string) {
   return bytesToHex(new Uint8Array(bits));
 }
 
-function timingSafeEqual(left: string, right: string) {
-  if (left.length !== right.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
-  }
-  return mismatch === 0;
-}
-
 function cookieValue(request: Request, name: string) {
   const cookie = request.headers.get("Cookie") ?? "";
   for (const item of cookie.split(";")) {
@@ -94,7 +86,7 @@ export async function hashPassword(password: string) {
 }
 
 export async function verifyPassword(password: string, hash: string, salt: string) {
-  return timingSafeEqual(await derivePassword(password, salt), hash);
+  return constantTimeEquals(await derivePassword(password, salt), hash);
 }
 
 export async function findUserForLogin(env: AppEnv, handle: string) {

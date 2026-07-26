@@ -1,6 +1,8 @@
 import { Heart, MessageCircle, Repeat2 } from "lucide-react";
+import { Fragment } from "react";
 import { Link, useLocation } from "react-router";
 import { findPresetAvatar, PresetAvatarSymbol } from "./avatar-presets";
+import { splitBodySegments } from "./mentions";
 import { sliceCodePoints } from "./text";
 
 export function normalizeDate(value: string) {
@@ -43,8 +45,13 @@ export function avatarClass(handle: string) {
   return classes[(Number.isNaN(code) ? 0 : code) % classes.length];
 }
 
-export function isOfficialHandle(handle: string) {
-  return handle === "commons_dev";
+/**
+ * 公式バッジを出すロール。ハンドル決め打ち（`commons_dev`）をやめ、`users.role` で
+ * 判定する。セルフホストでは公式アカウントのハンドルが違うため、
+ * 決め打ちだとバッジが誰にも付かない（あるいは無関係な人に付く）。
+ */
+export function isOfficialRole(role: string) {
+  return role === "admin";
 }
 
 /**
@@ -113,13 +120,24 @@ function useProfileLinkState() {
   return backTo ? { backTo } : undefined;
 }
 
-export function PostIdentity({ name, handle, createdAt }: { name: string; handle: string; createdAt: string }) {
+export function PostIdentity({
+  name,
+  handle,
+  authorRole,
+  createdAt,
+}: {
+  name: string;
+  handle: string;
+  /** 投稿者の `users.role`。公式バッジの判定に使う。 */
+  authorRole: string;
+  createdAt: string;
+}) {
   const linkState = useProfileLinkState();
   return (
     <div className="post-identity">
       <Link to={`/users/${encodeURIComponent(handle)}`} state={linkState} className="post-identity-link">
         <strong>{name}</strong>
-        {isOfficialHandle(handle) && (
+        {isOfficialRole(authorRole) && (
           <span className="verified" title="公式">
             <span aria-hidden="true">✓</span>
             <span className="sr-only">公式</span>
@@ -133,6 +151,31 @@ export function PostIdentity({ name, handle, createdAt }: { name: string; handle
       </time>
     </div>
   );
+}
+
+/**
+ * 本文を描画し、`@handle` をプロフィールへのリンクにする。
+ *
+ * ハンドルの実在確認はしない（表示は D1 クエリ 0 本）。存在しないハンドルは
+ * リンク先が 404 になるだけで、1画面あたり最大 50 件の照合を D1 へ投げるより安い。
+ */
+export function PostBody({ body, className }: { body: string; className?: string }) {
+  const linkState = useProfileLinkState();
+  // キーは本文中の文字オフセット。配列の添字と違い、本文が変われば別のキーになる。
+  let offset = 0;
+  const nodes = splitBodySegments(body).map((segment) => {
+    const start = offset;
+    offset += segment.type === "mention" ? segment.text.length + 1 : segment.value.length;
+    // 表示は本文に書かれたままの表記（segment.text）。リンク先だけ正規化済みハンドルを使う。
+    return segment.type === "mention" ? (
+      <Link key={`m${start}`} to={`/users/${encodeURIComponent(segment.handle)}`} state={linkState} className="mention">
+        @{segment.text}
+      </Link>
+    ) : (
+      <Fragment key={`t${start}`}>{segment.value}</Fragment>
+    );
+  });
+  return <p className={className}>{nodes}</p>;
 }
 
 function ReactionCount({ label, count, icon }: { label: string; count: number; icon: React.ReactNode }) {
@@ -162,6 +205,8 @@ export type PostSummary = {
   name: string;
   handle: string;
   avatarKey: string | null;
+  /** 投稿者の `users.role`。公式バッジの判定に使う */
+  role: string;
   body: string;
   createdAt: string;
   replies: number;
@@ -189,10 +234,10 @@ export function PostSummaryCard({
       <UserAvatar name={post.name} handle={post.handle} avatarKey={post.avatarKey} />
       <div className="post-summary-main">
         <header>
-          <PostIdentity name={post.name} handle={post.handle} createdAt={post.createdAt} />
+          <PostIdentity name={post.name} handle={post.handle} authorRole={post.role} createdAt={post.createdAt} />
           {action}
         </header>
-        <p>{post.body}</p>
+        <PostBody body={post.body} />
         <PostReactionCounts replies={post.replies} reposts={post.reposts} likes={post.likes} />
         {children}
       </div>

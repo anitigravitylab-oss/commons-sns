@@ -12,6 +12,15 @@ test.describe("プラットフォーム", () => {
     });
   });
 
+  test("robots.txt が静的アセットとして配信される", async ({ request }) => {
+    const response = await request.get("/robots.txt");
+    expect(response.status()).toBe(200);
+    const body = await response.text();
+    // 会員向けページはクロールさせない。
+    expect(body).toContain("Disallow: /settings");
+    expect(body).toContain("Allow: /users/");
+  });
+
   test("SSRレスポンスにセキュリティヘッダーが付く", async ({ page }) => {
     const response = await page.goto("/");
     expect(response?.status()).toBe(200);

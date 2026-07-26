@@ -6,6 +6,8 @@ export type TimelinePost = {
   name: string;
   handle: string;
   avatarKey: string | null;
+  /** 投稿者の `users.role`。公式バッジの判定に使う */
+  role: "user" | "moderator" | "admin";
   body: string;
   createdAt: string;
   replies: number;
@@ -22,6 +24,7 @@ type PostRow = {
   display_name: string;
   handle: string;
   avatar_key: string | null;
+  role: TimelinePost["role"];
   body: string;
   created_at: string;
   replies: number;
@@ -37,6 +40,7 @@ const POST_SELECT_SQL = `
   u.display_name,
   u.handle,
   u.avatar_key,
+  u.role,
   p.body,
   p.created_at,
   (SELECT COUNT(*) FROM posts replies WHERE replies.reply_to_id = p.id AND replies.deleted_at IS NULL) AS replies,
@@ -79,6 +83,7 @@ async function hydratePosts(env: AppEnv, rows: PostRow[], viewerId: string | nul
     name: row.display_name,
     handle: row.handle,
     avatarKey: row.avatar_key,
+    role: row.role,
     body: row.body,
     createdAt: row.created_at,
     replies: Number(row.replies),
@@ -124,7 +129,20 @@ export async function getTimeline(
   return hydratePosts(env, result.results ?? [], viewerId);
 }
 
-export async function getBookmarkedPosts(env: AppEnv, userId: string): Promise<TimelinePost[]> {
+/**
+ * ブックマークした投稿を新しい順に返す。
+ *
+ * `limit` / `offset` はルート側のページ送りが渡す。以前は固定の `LIMIT 100` で、
+ * 101 件目以降へ到達する手段が UI にも URL にも無かった。
+ */
+export async function getBookmarkedPosts(
+  env: AppEnv,
+  userId: string,
+  options: { limit?: number; offset?: number } = {},
+): Promise<TimelinePost[]> {
+  const limit = Math.min(Math.max(Math.trunc(options.limit ?? 20), 1), 100);
+  const requestedOffset = Math.trunc(options.offset ?? 0);
+  const offset = Number.isNaN(requestedOffset) ? 0 : Math.max(requestedOffset, 0);
   const result = await env.DB.prepare(
     `SELECT ${POST_SELECT_SQL}
      FROM post_reactions bookmark
@@ -135,9 +153,9 @@ export async function getBookmarkedPosts(env: AppEnv, userId: string): Promise<T
        AND p.deleted_at IS NULL
        AND p.visibility = 'public'
      ORDER BY bookmark.created_at DESC, p.id DESC
-     LIMIT 100`,
+     LIMIT ? OFFSET ?`,
   )
-    .bind(userId)
+    .bind(userId, limit, offset)
     .all<PostRow>();
 
   return hydratePosts(env, result.results ?? [], userId);

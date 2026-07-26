@@ -1,0 +1,9 @@
+# クロールは公開ページに限定する。会員向けページはログインへのリダイレクトが
+# 返るだけで、クロールさせる意味がない。
+User-agent: *
+Allow: /$
+Allow: /users/
+Disallow: /bookmarks
+Disallow: /settings
+Disallow: /profile
+Disallow: /api/

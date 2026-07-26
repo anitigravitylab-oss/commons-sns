@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeToken, RATE_LIMITS, resetRateLimits } from "../lib/rate-limit.server";
 import { addReaction, createPost, createTestApp, createUser, failingEnv, resetData, type TestApp } from "../testing/d1";
 import { expectData, expectRedirect, formRequest, getRequest, loginCookie, routeArgs } from "../testing/requests";
-import { action, loader } from "./bookmarks";
+import { action, loader, MAX_BOOKMARK_PAGE } from "./bookmarks";
 
 type ActionResult = { ok?: boolean; error?: string };
-type LoaderResult = { user: { id: string }; posts: { id: string }[]; bookmarksError: boolean };
+type LoaderResult = {
+  user: { id: string };
+  posts: { id: string }[];
+  page: number;
+  hasNextPage: boolean;
+  bookmarksError: boolean;
+};
 
 let app: TestApp;
 
@@ -18,9 +25,21 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(app.env);
+  // レートリミットは isolate メモリに残るのでテスト間で持ち越さない。
+  resetRateLimits();
 });
 
 const URL_BOOKMARKS = "http://test.local/bookmarks";
+
+/** 固定の基準時刻。ブックマークの並び順を決めるのに使う。 */
+const BASE_MS = Date.parse("2026-06-01T10:00:00Z");
+const bookmarkedAt = (index: number) => new Date(BASE_MS + index * 60_000).toISOString();
+
+/** ログイン済みの GET を撃ち、loader のデータを取り出す。 */
+async function callLoader(url: string, cookie: string): Promise<LoaderResult> {
+  const result = await loader(routeArgs(getRequest(url, { cookie }), app.env, { pattern: "/bookmarks" }));
+  return expectData<LoaderResult>(result).data;
+}
 
 describe("bookmarks loader", () => {
   it("redirects anonymous visitors to the login modal", async () => {
@@ -41,6 +60,66 @@ describe("bookmarks loader", () => {
     expect(data.user.id).toBe(user.id);
     expect(data.bookmarksError).toBe(false);
     expect(data.posts.map((post) => post.id)).toEqual(["kept"]);
+  });
+
+  it("20件ずつページングし、2ページ目で続きへ到達できる", async () => {
+    const author = await createUser(app.env);
+    const user = await createUser(app.env);
+    // 21件ブックマークする（新しい順に並ぶよう created_at をずらす）。
+    for (let index = 0; index < 21; index += 1) {
+      const id = `bm_${String(index).padStart(2, "0")}`;
+      await createPost(app.env, { id, authorId: author.id });
+      await addReaction(app.env, { userId: user.id, postId: id, kind: "bookmark", createdAt: bookmarkedAt(index) });
+    }
+    const cookie = await loginCookie(app.env, user.id);
+
+    const first = await callLoader(URL_BOOKMARKS, cookie);
+    expect(first.page).toBe(1);
+    expect(first.posts).toHaveLength(20);
+    expect(first.hasNextPage).toBe(true);
+    expect(first.posts[0].id).toBe("bm_20");
+
+    const second = await callLoader(`${URL_BOOKMARKS}?page=2`, cookie);
+    expect(second.page).toBe(2);
+    expect(second.hasNextPage).toBe(false);
+    // 101件目以降へ到達できなかった頃の回帰。1ページ目と中身が重ならないことも見る。
+    expect(second.posts.map((post) => post.id)).toEqual(["bm_00"]);
+  });
+
+  it("壊れたページ番号は1ページ目に丸める", async () => {
+    const author = await createUser(app.env);
+    const user = await createUser(app.env);
+    await createPost(app.env, { id: "only", authorId: author.id });
+    await addReaction(app.env, { userId: user.id, postId: "only", kind: "bookmark" });
+    const cookie = await loginCookie(app.env, user.id);
+
+    for (const query of ["?page=abc", "?page=0", "?page=-4", ""]) {
+      const result = await callLoader(`${URL_BOOKMARKS}${query}`, cookie);
+      expect(result.page).toBe(1);
+      expect(result.posts.map((post) => post.id)).toEqual(["only"]);
+    }
+  });
+
+  it("ページ番号に上限を掛けて OFFSET を深く走らせない", async () => {
+    // OFFSET は読み飛ばす行も走査されるため、上限が無いと `?page=99999` を並べるだけで
+    // 読み取り負荷を際限なく増幅できる（loader は GET なのでレートリミットも掛からない）。
+    const author = await createUser(app.env);
+    const user = await createUser(app.env);
+    for (let index = 0; index < 21; index += 1) {
+      const id = `deep_${String(index).padStart(2, "0")}`;
+      await createPost(app.env, { id, authorId: author.id });
+      await addReaction(app.env, { userId: user.id, postId: id, kind: "bookmark", createdAt: bookmarkedAt(index) });
+    }
+    const cookie = await loginCookie(app.env, user.id);
+
+    expect((await callLoader(URL_BOOKMARKS, cookie)).hasNextPage).toBe(true);
+
+    for (const query of [`?page=${MAX_BOOKMARK_PAGE + 1}`, "?page=99999", "?page=9007199254740993"]) {
+      const result = await callLoader(`${URL_BOOKMARKS}${query}`, cookie);
+      expect(result.page).toBe(MAX_BOOKMARK_PAGE);
+      // 上限ページでは「次へ」を出さない（押しても同じページに丸められるため）。
+      expect(result.hasNextPage).toBe(false);
+    }
   });
 
   it("flags an error instead of crashing when the bookmark query fails", async () => {
@@ -104,6 +183,22 @@ describe("bookmarks action", () => {
     }
   });
 
+  it("別サイトからの送信は 403、本文が大きすぎる送信は 413", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    const send = (options: { origin?: string; contentLength?: number }) =>
+      action(
+        routeArgs(
+          formRequest(URL_BOOKMARKS, { intent: "removeBookmark", postId: "x" }, { cookie, ...options }),
+          app.env,
+          { pattern: "/bookmarks" },
+        ),
+      );
+
+    expect(((await send({ origin: "https://evil.example" })) as Response).status).toBe(403);
+    expect(expectData<ActionResult>(await send({ contentLength: 1_048_576 })).status).toBe(413);
+  });
+
   it("maps a failing delete to a 500 with a friendly message", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -121,5 +216,29 @@ describe("bookmarks action", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("bookmarks rate limits", () => {
+  it("stops a burst of bookmark removals with 429 and keeps the reaction", async () => {
+    const author = await createUser(app.env);
+    const user = await createUser(app.env);
+    await createPost(app.env, { id: "kept", authorId: author.id });
+    await addReaction(app.env, { userId: user.id, postId: "kept", kind: "bookmark" });
+    const cookie = await loginCookie(app.env, user.id);
+    // ブックマーク解除はリアクションと同じ枠を使う。
+    for (let index = 0; index < RATE_LIMITS.reaction.capacity; index += 1) consumeToken("reaction", user.id);
+
+    const result = await action(
+      routeArgs(formRequest(URL_BOOKMARKS, { intent: "removeBookmark", postId: "kept" }, { cookie }), app.env, {
+        pattern: "/bookmarks",
+      }),
+    );
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(429);
+    expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+
+    const rows = await app.env.DB.prepare("SELECT kind FROM post_reactions WHERE user_id = ?").bind(user.id).all();
+    expect(rows.results).toEqual([{ kind: "bookmark" }]);
   });
 });

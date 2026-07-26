@@ -7,7 +7,12 @@ export default defineConfig({
     // Miniflare (workerd) boots once per suite in beforeAll and PBKDF2 runs
     // 100k iterations per hash, so the defaults are too tight on slow CI.
     testTimeout: 15_000,
-    hookTimeout: 30_000,
+    // `beforeAll` は Miniflare（workerd の子プロセス）を起動してマイグレーションを
+    // 流すが、スイート数ぶんの workerd がコア数を超えて同時に立ち上がるため、
+    // 起動だけで 30 秒に届くことがある（症状は `Hook timed out` で、そのファイルの
+    // テストが丸ごと skip される）。テスト本体の遅さではないので、ここだけを広げて
+    // 並列度は落とさない。
+    hookTimeout: 60_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "lcov"],
