@@ -556,6 +556,24 @@ describe("rate limits", () => {
     }
   });
 
+  it("長さが範囲外のパスワードではログインの枠を消費しない", async () => {
+    // どのアカウントにも通り得ない送信（空欄・短すぎるパスワード）は PBKDF2 まで
+    // 行かない。ここで枠を減らすと、同じ出口 IP を共有する他の人まで 429 になる。
+    await createUser(app.env, { handle: "member", password: "secret pass 9" });
+    for (let index = 0; index < RATE_LIMITS.login.capacity + 5; index += 1) {
+      const rejected = await callAction(
+        formRequest(URL_HOME, { intent: "login", handle: "member", password: index % 2 === 0 ? "" : "short" }),
+      );
+      expect(expectData<ActionResult>(rejected).status).toBe(401);
+    }
+
+    // 枠は満タンのままなので、正しいログインはそのまま通る。
+    const allowed = await callAction(
+      formRequest(URL_HOME, { intent: "login", handle: "member", password: "secret pass 9" }),
+    );
+    expect(expectRedirect(allowed).location).toBe("/");
+  });
+
   it("stops brute-forced logins before the password is verified", async () => {
     await createUser(app.env, { handle: "member", password: "secret pass 9" });
     for (let index = 0; index < RATE_LIMITS.login.capacity; index += 1) consumeToken("login", "unknown");

@@ -181,16 +181,18 @@ async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormDa
 }
 
 async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
-  // 総当たり対策。PBKDF2 の検証は CPU を使うので、消費する前に判定する。
-  // 主体は IP のみ。対象アカウント単位の枠を設けない理由は `rate-limit.server.ts` を参照
-  // （試行時点で消費する口座単位の枠は、他人が正規の持ち主を締め出す道具になる）。
-  const limited = enforceLimit("login", clientKey(request), "login");
-  if (limited) return limited;
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
   if (password.length < 8 || password.length > 128) {
     return fail("IDまたはパスワードが違います。", 401, "login");
   }
+  // 総当たり対策。PBKDF2 の検証は CPU を使うので、消費する前に判定する。
+  // 消費するのは長さの検証を通った試行だけにする。どのアカウントにも通り得ない
+  // 送信（空欄など）で枠が減ると、同じ出口 IP を共有する他の人まで締め出される。
+  // 主体は IP のみ。対象アカウント単位の枠を設けない理由は `rate-limit.server.ts` を参照
+  // （試行時点で消費する口座単位の枠は、他人が正規の持ち主を締め出す道具になる）。
+  const limited = enforceLimit("login", clientKey(request), "login");
+  if (limited) return limited;
   const user = await findUserForLogin(env, handle);
   const verified = await verifyPasswordOrDummy(password, user?.password_hash, user?.password_salt);
   if (!user || !verified) {
