@@ -14,7 +14,7 @@
     "lint": "oxlint --format agent",
     "lint:fix": "oxlint --fix",
     "lint:strict": "oxlint --deny-warnings",
-    "lint:ci": "oxlint --format github",
+    "lint:ci": "oxlint --format github --deny-warnings",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

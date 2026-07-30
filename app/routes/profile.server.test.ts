@@ -10,7 +10,7 @@ import {
   malformedFormRequest,
   routeArgs,
 } from "../testing/requests";
-import { action, loader } from "./profile";
+import { action, loader, MAX_PROFILE_PAGE } from "./profile";
 
 type ActionResult = { ok?: boolean; error?: string };
 
@@ -96,6 +96,37 @@ describe("profile loader", () => {
       expect(result.page).toBe(1);
       expect(result.posts).toHaveLength(1);
     }
+  });
+
+  it("caps the page number so OFFSET cannot be driven arbitrarily deep", async () => {
+    // OFFSET は読み飛ばす行も実際に走査されるため、上限が無いと `?page=99999` を並べるだけで
+    // 読み取り負荷を際限なく増幅できる（loader は GET なのでレートリミットも掛かりません）。
+    const user = await createUser(app.env, { handle: "capped" });
+    await createPost(app.env, { authorId: user.id });
+
+    for (const query of [`?page=${MAX_PROFILE_PAGE + 1}`, "?page=99999", "?page=9007199254740993"]) {
+      const result = await callLoader(`http://test.local/users/capped${query}`, "capped");
+      expect(result.page).toBe(MAX_PROFILE_PAGE);
+      expect(result.hasNextPage).toBe(false);
+    }
+  });
+
+  it("stops offering a next page once the cap is reached", async () => {
+    const user = await createUser(app.env, { handle: "deep" });
+    // 上限ページを埋めきる件数は用意せず、上限ページで打ち切られることだけを確かめる。
+    for (let index = 0; index < 21; index += 1) {
+      await createPost(app.env, {
+        id: `deep_${String(index).padStart(2, "0")}`,
+        authorId: user.id,
+        createdAt: `2026-06-01 10:${String(index).padStart(2, "0")}:00`,
+      });
+    }
+
+    const first = await callLoader("http://test.local/users/deep", "deep");
+    expect(first.hasNextPage).toBe(true);
+
+    const capped = await callLoader(`http://test.local/users/deep?page=${MAX_PROFILE_PAGE}`, "deep");
+    expect(capped.hasNextPage).toBe(false);
   });
 
   it("reports whether the viewer follows the profile", async () => {

@@ -28,6 +28,23 @@ export function meta() {
 
 const PROFILE_PAGE_SIZE = 20;
 
+/**
+ * プロフィール投稿一覧の最大ページ番号。
+ *
+ * SQLite の OFFSET は読み飛ばす行も実際に走査するため、上限が無いと URL の `page` を
+ * 大きくするだけで1リクエストの読み取り行数が「その著者の生存投稿数」まで伸びる。
+ * loader は GET なのでレートリミットも掛かっておらず、安価なリクエストで読み取り
+ * 負荷を増幅できてしまう。50 ページ = 最大 1,000 件で頭打ちにする。
+ */
+export const MAX_PROFILE_PAGE = 50;
+
+/** URL のページ番号を 1〜{@link MAX_PROFILE_PAGE} の整数に正規化する。 */
+function pageFromUrl(url: string) {
+  const requested = Number.parseInt(new URL(url).searchParams.get("page") ?? "1", 10);
+  if (!Number.isFinite(requested) || requested < 1) return 1;
+  return Math.min(requested, MAX_PROFILE_PAGE);
+}
+
 function handleFromParams(params: Route.LoaderArgs["params"]) {
   return String(params.handle ?? "")
     .trim()
@@ -42,8 +59,7 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
   ]);
   if (!profile) throw data(null, { status: 404 });
 
-  const requestedPage = Number.parseInt(new URL(request.url).searchParams.get("page") ?? "1", 10);
-  const page = Number.isFinite(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  const page = pageFromUrl(request.url);
 
   let posts: TimelinePost[] = [];
   let hasNextPage = false;
@@ -58,7 +74,8 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
       user && user.id !== profile.id ? isFollowing(env, user.id, profile.id) : false,
     ]);
     posts = fetchedPosts.slice(0, PROFILE_PAGE_SIZE);
-    hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE;
+    // 上限ページでは「次へ」を出さない（出しても pageFromUrl が同じページへ丸める）。
+    hasNextPage = fetchedPosts.length > PROFILE_PAGE_SIZE && page < MAX_PROFILE_PAGE;
     viewerFollows = following;
   } catch (error) {
     console.error("Failed to load profile posts", error);

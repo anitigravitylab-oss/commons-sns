@@ -13,21 +13,52 @@ export function meta() {
   return [{ title: "ブックマーク — Commons" }];
 }
 
+/** ブックマーク一覧の1ページあたり件数。 */
+const BOOKMARK_PAGE_SIZE = 20;
+
+/**
+ * ブックマーク一覧の最大ページ番号。
+ *
+ * SQLite の OFFSET は読み飛ばす行も実際に走査するので、上限が無いと URL の `page` を
+ * 大きくするだけで1リクエストの読み取り行数がその人のブックマーク総数まで伸びる。
+ * 50 ページ ＝ 最大 1,000 件で頭打ちにする（以前は 100 件で頭打ちのうえ、
+ * 101 件目以降へ到達する手段が UI にも URL にも無かった）。
+ */
+export const MAX_BOOKMARK_PAGE = 50;
+
+/** URL のページ番号を 1〜{@link MAX_BOOKMARK_PAGE} の整数に正規化する。 */
+function pageFromUrl(url: string) {
+  const requested = Number.parseInt(new URL(url).searchParams.get("page") ?? "1", 10);
+  if (!Number.isFinite(requested) || requested < 1) return 1;
+  return Math.min(requested, MAX_BOOKMARK_PAGE);
+}
+
 export async function loader({ request, context }: Route.LoaderArgs) {
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/?auth=login");
 
+  const page = pageFromUrl(request.url);
+
   let posts: TimelinePost[] = [];
+  let hasNextPage = false;
   let bookmarksError = false;
   try {
-    posts = await getBookmarkedPosts(env, user.id);
+    // 1件多く読んで「次のページがあるか」を判定する（COUNT(*) は撃たない）。
+    const fetched = await getBookmarkedPosts(env, user.id, {
+      limit: BOOKMARK_PAGE_SIZE + 1,
+      offset: (page - 1) * BOOKMARK_PAGE_SIZE,
+    });
+    posts = fetched.slice(0, BOOKMARK_PAGE_SIZE);
+    // 上限ページでは「次へ」を出さない（出しても pageFromUrl が同じページへ丸めるので、
+    // 押しても同じ画面に戻る自己ループになる）。
+    hasNextPage = fetched.length > BOOKMARK_PAGE_SIZE && page < MAX_BOOKMARK_PAGE;
   } catch (error) {
     console.error("Failed to load bookmarks", error);
     bookmarksError = true;
   }
 
-  return { user, posts, bookmarksError };
+  return { user, posts, page, hasNextPage, bookmarksError };
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
@@ -87,7 +118,8 @@ function BookmarkCard({ post }: { post: TimelinePost }) {
 }
 
 export default function BookmarksPage({ loaderData }: Route.ComponentProps) {
-  const { user, posts, bookmarksError } = loaderData;
+  const { user, posts, page, hasNextPage, bookmarksError } = loaderData;
+  const paged = page > 1 || hasNextPage;
 
   return (
     <SubpageShell
@@ -96,7 +128,9 @@ export default function BookmarksPage({ loaderData }: Route.ComponentProps) {
           <h1>ブックマーク</h1>
           <p className="subpage-subtitle" aria-live="polite">
             @{user.handle}
-            {!bookmarksError && ` · ${posts.length}件`}
+            {/* 総件数は COUNT(*) を撃たないと出せない。ページが分かれているときは
+                「このページの件数」を総数と誤読させないよう、ページ番号を出す。 */}
+            {!bookmarksError && (paged ? ` · ${page}ページ目` : ` · ${posts.length}件`)}
           </p>
         </>
       }
@@ -108,12 +142,25 @@ export default function BookmarksPage({ loaderData }: Route.ComponentProps) {
       ) : posts.length === 0 ? (
         <div className="empty-state tall">
           <Bookmark size={30} />
-          <strong>ブックマークはまだありません</strong>
-          <span>投稿のブックマークボタンを押すと、ここであとから確認できます。</span>
-          <Link to="/">投稿を見に行く</Link>
+          <strong>{page > 1 ? "このページにはブックマークがありません" : "ブックマークはまだありません"}</strong>
+          {page > 1 ? (
+            <Link to="?page=1">最初のページへ戻る</Link>
+          ) : (
+            <>
+              <span>投稿のブックマークボタンを押すと、ここであとから確認できます。</span>
+              <Link to="/">投稿を見に行く</Link>
+            </>
+          )}
         </div>
       ) : (
         posts.map((post) => <BookmarkCard key={post.id} post={post} />)
+      )}
+
+      {paged && (
+        <nav aria-label="ブックマークのページ移動" className="pager">
+          {page > 1 ? <Link to={`?page=${page - 1}`}>← 前へ</Link> : <span />}
+          {hasNextPage && <Link to={`?page=${page + 1}`}>次へ →</Link>}
+        </nav>
       )}
     </SubpageShell>
   );

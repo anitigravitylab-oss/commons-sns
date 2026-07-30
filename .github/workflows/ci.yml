@@ -40,6 +40,9 @@ jobs:
             run: npm run test:coverage
     steps:
       - uses: actions/checkout@v4
+        with:
+          # チェックのみで push しないジョブのため、GITHUB_TOKEN を .git/config に残さない。
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
