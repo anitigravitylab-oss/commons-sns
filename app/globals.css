@@ -1272,6 +1272,14 @@ a {
 .post-summary-main .inline-error {
   margin-top: 10px;
 }
+/* 本文中の @メンション（`PostBody` が張るプロフィールへのリンク） */
+.mention {
+  color: var(--accent);
+  font-weight: 600;
+}
+.mention:hover {
+  text-decoration: underline;
+}
 .reaction-counts {
   display: flex;
   align-items: center;

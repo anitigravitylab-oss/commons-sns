@@ -20,7 +20,7 @@ test.describe("未ログイン閲覧", () => {
     await expect(page.getByRole("heading", { name: "Commons 開発チーム", level: 1 })).toBeVisible();
     await expect(page.locator(".profile-handle")).toHaveText("@commons_dev");
     await expect(page.getByText("Commonsの最初の公開開発が始まりました")).toBeVisible();
-    // 公式バッジは commons_dev にだけ付く。
+    // 公式バッジは role = 'admin' の投稿者に付く（シードでは commons_dev だけ）。
     await expect(page.locator(".verified").first()).toBeVisible();
   });
 

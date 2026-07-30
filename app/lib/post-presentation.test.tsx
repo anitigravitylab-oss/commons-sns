@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   avatarAppearance,
   avatarClass,
-  isOfficialHandle,
+  isOfficialRole,
   normalizeDate,
+  PostBody,
   PostIdentity,
   PostReactionCounts,
   PostSummaryCard,
@@ -87,11 +88,11 @@ describe("avatarClass", () => {
   });
 });
 
-describe("isOfficialHandle", () => {
-  it("only recognizes the commons_dev account", () => {
-    expect(isOfficialHandle("commons_dev")).toBe(true);
-    expect(isOfficialHandle("commons_dev2")).toBe(false);
-    expect(isOfficialHandle("COMMONS_DEV")).toBe(false);
+describe("isOfficialRole", () => {
+  it("returns true only for the admin role", () => {
+    expect(isOfficialRole("admin")).toBe(true);
+    expect(isOfficialRole("moderator")).toBe(false);
+    expect(isOfficialRole("user")).toBe(false);
   });
 });
 
@@ -151,7 +152,9 @@ function renderInRouter(ui: React.ReactElement, path = "/") {
 
 describe("PostIdentity", () => {
   it("shows the name, handle and a machine-readable timestamp", () => {
-    const html = renderInRouter(<PostIdentity name="あおい" handle="aoi_note" createdAt="2026-07-01 00:00:00" />);
+    const html = renderInRouter(
+      <PostIdentity name="あおい" handle="aoi_note" authorRole="user" createdAt="2026-07-01 00:00:00" />,
+    );
     expect(html).toContain("あおい");
     expect(html).toContain("@aoi_note");
     expect(html).toContain('href="/users/aoi_note"');
@@ -159,11 +162,43 @@ describe("PostIdentity", () => {
     expect(html).not.toContain("公式");
   });
 
-  it("adds the verified badge only for the official account", () => {
+  it("adds the verified badge only for admin authors", () => {
     const html = renderInRouter(
-      <PostIdentity name="Commons 開発チーム" handle="commons_dev" createdAt="2026-07-01 00:00:00" />,
+      <PostIdentity
+        name="Commons 開発チーム"
+        handle="commons_dev"
+        authorRole="admin"
+        createdAt="2026-07-01 00:00:00"
+      />,
     );
     expect(html).toContain("公式");
+  });
+});
+
+describe("PostBody", () => {
+  it("メンションをプロフィールへのリンクにする", () => {
+    const html = renderInRouter(<PostBody body="@aoi_note さん、こんにちは @yuu_builds" />);
+    expect(html).toContain('href="/users/aoi_note"');
+    expect(html).toContain('href="/users/yuu_builds"');
+    expect(html).toContain("さん、こんにちは");
+  });
+
+  it("メールアドレスや URL の中の @ はリンクにしない", () => {
+    const html = renderInRouter(<PostBody body="mail@example.com と https://example.com/@someone" />);
+    expect(html).not.toContain('href="/users/');
+    expect(html).toContain("mail@example.com");
+  });
+
+  it("大文字混じりの表記は本文のまま表示し、リンク先だけ正規化する", () => {
+    const html = renderInRouter(<PostBody body="@Demo_Aoi さん" />);
+    expect(html).toContain('href="/users/demo_aoi"');
+    expect(html).toContain("@Demo_Aoi");
+  });
+
+  it("メンションが無い本文はそのまま出す", () => {
+    const html = renderInRouter(<PostBody body="ふつうの本文" />);
+    expect(html).toContain("ふつうの本文");
+    expect(html).not.toContain('class="mention"');
   });
 });
 
@@ -185,6 +220,7 @@ describe("PostSummaryCard", () => {
     name: "あおい",
     handle: "aoi_note",
     avatarKey: null,
+    role: "user",
     body: "テスト本文です",
     createdAt: "2026-07-01 00:00:00",
     replies: 0,
