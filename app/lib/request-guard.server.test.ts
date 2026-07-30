@@ -146,6 +146,43 @@ describe("readFormDataBounded", () => {
     expect(streamCancelled).toBe(true);
   });
 
+  it("巨大なチャンクを1つ送られても、一度に受け取る量はバッファで抑える", async () => {
+    // チャンクの大きさは Fetch の仕様では上限が無い。受け取ってから判定する読み方だと、
+    // 上限超過と分かる前にチャンク1つぶんがまるごとヒープへ載り、門番の目的
+    // （isolate のメモリ保護）を大きな1チャンクで迂回できてしまう。
+    let maxViewBytes = 0;
+    let servedBytes = 0;
+    const stream = new ReadableStream({
+      type: "bytes",
+      pull(controller) {
+        const view = controller.byobRequest?.view;
+        if (!view) {
+          // BYOB で読まれなかった場合（フォールバック経路）はまとめて渡す。
+          controller.enqueue(new Uint8Array(256 * 1_024));
+          return;
+        }
+        maxViewBytes = Math.max(maxViewBytes, view.byteLength);
+        servedBytes += view.byteLength;
+        new Uint8Array(view.buffer, view.byteOffset, view.byteLength).fill(0x78); // "x"
+        controller.byobRequest.respond(view.byteLength);
+      },
+    });
+    const request = new Request(URL_ACTION, {
+      method: "POST",
+      body: stream,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      // @ts-expect-error ストリーム本文には duplex 指定が要る（型定義にはまだ無い）
+      duplex: "half",
+    });
+
+    expect(await readFormDataBounded(request, 32_768)).toMatchObject({ ok: false, status: 413 });
+    // 1回の読み取りで受け取るのは、こちらが用意した器のぶんだけ。
+    expect(maxViewBytes).toBeGreaterThan(0); // BYOB で読めていること（0 ならフォールバックしている）
+    expect(maxViewBytes).toBeLessThanOrEqual(8_192);
+    // 上限を大きく超えて読み続けてはいない（超過が分かった時点で打ち切る）。
+    expect(servedBytes).toBeLessThanOrEqual(32_768 + 8_192);
+  });
+
   it("数値として読めない Content-Length は申告を信用せず、実際の長さで判定する", async () => {
     const request = streamingPostRequest(["intent=noop"], { "Content-Length": "not-a-number" });
     expect(request.headers.get("content-length")).toBe("not-a-number");

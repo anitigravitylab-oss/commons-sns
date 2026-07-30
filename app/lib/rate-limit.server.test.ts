@@ -89,6 +89,22 @@ describe("consumeToken", () => {
     expect(consumeToken("post", "user_1", T0 - 60_000).allowed).toBe(false);
   });
 
+  it("時計が戻ってから元へ戻っても、その区間は補充に数えない", () => {
+    // 巻き戻した時刻をそのまま記録すると、時計が戻ったときに同じ区間が
+    // もう一度「経過した」ものとして補充され、巻き戻し幅ぶんだけ上限を素通しできる。
+    const { capacity, refillPerSecond } = RATE_LIMITS.post;
+    for (let index = 0; index < capacity; index += 1) consumeToken("post", "user_1", T0);
+    expect(consumeToken("post", "user_1", T0).allowed).toBe(false);
+
+    // 1トークンぶん巻き戻してから、元の時刻へ復帰させる。
+    const oneToken = Math.ceil(1_000 / refillPerSecond);
+    expect(consumeToken("post", "user_1", T0 - oneToken).allowed).toBe(false);
+    expect(consumeToken("post", "user_1", T0).allowed).toBe(false);
+
+    // 実際に時間が進んだぶんは、これまでどおり補充される。
+    expect(consumeToken("post", "user_1", T0 + oneToken).allowed).toBe(true);
+  });
+
   it("evicts refilled buckets once the isolate holds too many", () => {
     // 満タンに戻ったバケツ（情報を持たない）を上限まで作る。
     for (let index = 0; index < MAX_BUCKETS; index += 1) consumeToken("post", `filler_${index}`, T0);

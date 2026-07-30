@@ -136,10 +136,6 @@ export async function action({ request, context }: Route.ActionArgs) {
 }
 
 async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
-  // 登録は IP 単位で絞る。バケツは isolate ローカルなので、分散した攻撃までは
-  // 止まらない（`rate-limit.server.ts` の冒頭コメントを参照）。
-  const limited = enforceLimit("signup", clientKey(request), "signup");
-  if (limited) return limited;
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const displayName = sanitizeText(formText(formData, "displayName"));
   const password = String(formData.get("password") ?? "");
@@ -156,6 +152,14 @@ async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormDa
   if (password.length < 8 || password.length > 128) {
     return fail("パスワードは8〜128文字で入力してください。", 400, "signup");
   }
+  // 登録は IP 単位で絞る。消費するのは形式として通った登録試行だけにする。
+  // 検証より前に消費すると、ID の打ち間違いを3回しただけで枠が空になり、
+  // 同じ出口 IP（NAT・社内回線・モバイル回線）を共有する他の人まで登録できなくなる。
+  // 一方で、CPU を使う PBKDF2 の導出より前ではあるので、総当たり側の狙いは変わらない。
+  // バケツは isolate ローカルなので、分散した攻撃までは止まらない
+  // （`rate-limit.server.ts` の冒頭コメントを参照）。
+  const limited = enforceLimit("signup", clientKey(request), "signup");
+  if (limited) return limited;
   const userId = crypto.randomUUID();
   const { hash, salt } = await hashPassword(password);
   try {

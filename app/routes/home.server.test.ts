@@ -535,6 +535,27 @@ describe("rate limits", () => {
     expect(row?.total).toBe(RATE_LIMITS.signup.capacity);
   });
 
+  it("入力ミスでは登録の枠を消費しない", async () => {
+    // 検証より前に消費すると、ID の打ち間違いを3回しただけで枠が空になり、
+    // 同じ出口 IP（NAT・社内回線・モバイル回線）を共有する他の人まで登録できなくなる。
+    const rejected: Record<string, string>[] = [
+      { ...signupFields, handle: "no" },
+      { ...signupFields, handle: "admin" },
+      { ...signupFields, handle: "taken_form", password: "short" },
+      { ...signupFields, handle: "ok_handle", displayName: "" },
+    ];
+    for (const fields of rejected) {
+      const result = await callAction(formRequest(URL_HOME, fields));
+      expect(expectData<ActionResult>(result).status).toBe(400);
+    }
+
+    // 枠は満タンのままなので、正しい登録が capacity 回ぶん通る。
+    for (let index = 0; index < RATE_LIMITS.signup.capacity; index += 1) {
+      const allowed = await callAction(formRequest(URL_HOME, { ...signupFields, handle: `newcomer${index}` }));
+      expect(expectRedirect(allowed).location).toBe("/");
+    }
+  });
+
   it("stops brute-forced logins before the password is verified", async () => {
     await createUser(app.env, { handle: "member", password: "secret pass 9" });
     for (let index = 0; index < RATE_LIMITS.login.capacity; index += 1) consumeToken("login", "unknown");

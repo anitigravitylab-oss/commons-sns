@@ -132,12 +132,18 @@ export function consumeToken(name: RateLimitName, subject: string, now: number =
     tokens = rule.capacity;
   }
 
+  // 時計が巻き戻ったときは、記録済みの時刻を後退させない。古い時刻で上書きすると、
+  // 時計が元に戻ったときに同じ区間がもう一度「経過した」ものとして補充され、
+  // 巻き戻し幅ぶんだけ上限を素通しできてしまう（`refill` は経過が負なら補充しない
+  // ので、後退させないかぎり巻き戻し中も残量は据え置きになる）。
+  const updatedAt = existing ? Math.max(now, existing.updatedAt) : now;
+
   if (tokens < 1) {
-    buckets.set(key, { tokens, updatedAt: now, rule });
+    buckets.set(key, { tokens, updatedAt, rule });
     // tokens < 1 なので (1 - tokens) は必ず正、切り上げ結果も必ず 1 以上になる。
     return { allowed: false, retryAfterSeconds: Math.ceil((1 - tokens) / rule.refillPerSecond) };
   }
-  buckets.set(key, { tokens: tokens - 1, updatedAt: now, rule });
+  buckets.set(key, { tokens: tokens - 1, updatedAt, rule });
   return { allowed: true, retryAfterSeconds: 0 };
 }
 

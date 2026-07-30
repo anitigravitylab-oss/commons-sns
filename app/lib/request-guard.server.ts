@@ -72,20 +72,74 @@ async function parseFormData(source: Request): Promise<BoundedFormDataResult> {
 }
 
 /**
- * 長さの申告が無い本文を、上限まで数えながら読む。
+ * 長さの申告が無い本文を読むとき、1回の読み取りで受け取る最大バイト数（8KiB）。
  *
- * 上限を超えた時点で読み取りを打ち切って残りを捨てるので、ヒープに載るのは
- * 高々 `maxBytes` ぶん＋直前のチャンク1つで、申告ありの経路と同じ上限で抑えられる。
+ * ストリームのチャンクの大きさは Fetch の仕様では上限が無く、送信側とランタイムの
+ * 都合で決まる。既定の読み取りだと「上限超過だと分かる前に、チャンク1つぶんが
+ * まるごとヒープへ載る」ので、大きなチャンクを1つ送るだけでこの門番の目的
+ * （isolate のメモリ保護）を迂回できてしまう。受け取る器の大きさをこちらで決めれば、
+ * 一度に載るのはこのサイズまでになる。
  */
-async function readBoundedBody(request: Request, maxBytes: number): Promise<BoundedFormDataResult> {
-  // 本文が無い送信（空のフォーム）はそのまま渡す。
-  if (request.body === null) return parseFormData(request);
+const STREAM_CHUNK_BYTES = 8_192;
 
-  const reader = request.body.getReader();
+/** 読み取ったチャンク列、または失敗（そのまま応答へ写せる形）。 */
+type CollectedBody =
+  { ok: true; chunks: Uint8Array[]; total: number } | { ok: false; status: 413 | 500; message: string };
+
+/** BYOB リーダーを取る。バイトストリームでなければ null（既定の読み取りに落ちる）。 */
+function byobReaderOf(body: ReadableStream<Uint8Array>): ReadableStreamBYOBReader | null {
+  try {
+    return body.getReader({ mode: "byob" });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BYOB で読む。渡したバッファより多くは一度に受け取らないので、上限判定より前に
+ * ヒープへ載るのは高々 {@link STREAM_CHUNK_BYTES} ぶんになる。
+ */
+async function collectViaByob(reader: ReadableStreamBYOBReader, maxBytes: number): Promise<CollectedBody> {
   const chunks: Uint8Array[] = [];
   let total = 0;
-  // 次のチャンクは前のチャンクを読み終えてからしか来ない。並列にまとめられる
-  // 待ち合わせが無いので、ここは逐次の await が唯一の読み方になる。
+  let buffer = new ArrayBuffer(STREAM_CHUNK_BYTES);
+  // 次のチャンクは前のチャンクを読み終えてからしか来ない。まとめられる待ち合わせが
+  // 無いので、ここは逐次の await が唯一の読み方になる。
+  /* oxlint-disable no-await-in-loop */
+  try {
+    for (;;) {
+      const { done, value } = await reader.read(new Uint8Array(buffer));
+      // 打ち切り済みでも done が立つ。value が無い場合はそこで終わり。
+      if (done || value === undefined) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // 残りは受け取らない。ここで捨てないと上限が意味を失う。
+        await reader.cancel();
+        return { ok: false, status: 413, message: FORM_TOO_LARGE_MESSAGE };
+      }
+      // `value` は次の読み取りで書き換える器の一部なので、内容をコピーして保持する。
+      chunks.push(new Uint8Array(value));
+      // 渡したバッファは read のたびに detach される。返ってきた側を次に使う。
+      buffer = value.buffer;
+    }
+  } catch (error) {
+    console.error("form body read failed", error);
+    return { ok: false, status: 500, message: FORM_UNREADABLE_MESSAGE };
+  }
+  /* oxlint-enable no-await-in-loop */
+  return { ok: true, chunks, total };
+}
+
+/**
+ * 既定の読み取り（BYOB を持たないストリーム用）。チャンクの大きさは選べないので、
+ * 受け取った時点で上限を超えていれば、その場で打ち切る。
+ */
+async function collectViaDefault(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  maxBytes: number,
+): Promise<CollectedBody> {
+  const chunks: Uint8Array[] = [];
+  let total = 0;
   /* oxlint-disable no-await-in-loop */
   try {
     for (;;) {
@@ -93,7 +147,6 @@ async function readBoundedBody(request: Request, maxBytes: number): Promise<Boun
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        // 残りは受け取らない。ここで捨てないと上限が意味を失う。
         await reader.cancel();
         return { ok: false, status: 413, message: FORM_TOO_LARGE_MESSAGE };
       }
@@ -104,10 +157,28 @@ async function readBoundedBody(request: Request, maxBytes: number): Promise<Boun
     return { ok: false, status: 500, message: FORM_UNREADABLE_MESSAGE };
   }
   /* oxlint-enable no-await-in-loop */
+  return { ok: true, chunks, total };
+}
 
-  const body = new Uint8Array(total);
+/**
+ * 長さの申告が無い本文を、上限まで数えながら読む。
+ *
+ * 上限を超えた時点で読み取りを打ち切って残りを捨てるので、ヒープに載るのは
+ * 高々 `maxBytes` ぶん＋1回の読み取りぶんで、申告ありの経路と同じ上限で抑えられる。
+ */
+async function readBoundedBody(request: Request, maxBytes: number): Promise<BoundedFormDataResult> {
+  // 本文が無い送信（空のフォーム）はそのまま渡す。
+  if (request.body === null) return parseFormData(request);
+
+  const byob = byobReaderOf(request.body);
+  const collected = byob
+    ? await collectViaByob(byob, maxBytes)
+    : await collectViaDefault(request.body.getReader(), maxBytes);
+  if (!collected.ok) return collected;
+
+  const body = new Uint8Array(collected.total);
   let offset = 0;
-  for (const chunk of chunks) {
+  for (const chunk of collected.chunks) {
     body.set(chunk, offset);
     offset += chunk.byteLength;
   }
