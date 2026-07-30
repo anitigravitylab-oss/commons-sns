@@ -5,6 +5,8 @@ import { cloudflareContext } from "../cloudflare";
 import { getSessionUser } from "../lib/auth.server";
 import { PostSummaryCard } from "../lib/post-presentation";
 import { getBookmarkedPosts, type TimelinePost } from "../lib/posts.server";
+import { consumeToken, rateLimitResponseInit, RATE_LIMIT_MESSAGE } from "../lib/rate-limit.server";
+import { crossSiteRejection, readFormDataBounded } from "../lib/request-guard.server";
 import { SubpageShell } from "../lib/subpage";
 
 type ActionResult = { ok?: boolean; error?: string };
@@ -31,15 +33,27 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 }
 
 export async function action({ request, context }: Route.ActionArgs) {
+  // クロスサイト送信と過大な本文は、セッションを引く前に落とす（`request-guard.server.ts`）。
+  const rejected = crossSiteRejection(request);
+  if (rejected) return rejected;
+
   const { env } = context.get(cloudflareContext);
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/?auth=login");
 
-  const formData = await request.formData();
+  const body = await readFormDataBounded(request);
+  if (!body.ok) return data<ActionResult>({ error: body.message }, { status: body.status });
+  const formData = body.formData;
   const intent = String(formData.get("intent") ?? "");
   const postId = String(formData.get("postId") ?? "").trim();
   if (intent !== "removeBookmark" || !postId) {
     return data<ActionResult>({ error: "不正な操作です。" }, { status: 400 });
+  }
+
+  // ブックマーク解除はリアクションと同じ枠を共有する。
+  const verdict = consumeToken("reaction", user.id);
+  if (!verdict.allowed) {
+    return data<ActionResult>({ error: RATE_LIMIT_MESSAGE }, rateLimitResponseInit(verdict));
   }
 
   try {

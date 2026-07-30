@@ -38,6 +38,9 @@ import type { SessionUser } from "../lib/auth.server";
 import { avatarAppearance, PostIdentity, UserAvatar } from "../lib/post-presentation";
 import { getTimeline } from "../lib/posts.server";
 import type { TimelinePost, TimelineScope } from "../lib/posts.server";
+import { clientKey, consumeToken, rateLimitResponseInit, RATE_LIMIT_MESSAGE } from "../lib/rate-limit.server";
+import type { RateLimitName } from "../lib/rate-limit.server";
+import { crossSiteRejection, readFormDataBounded } from "../lib/request-guard.server";
 import { countCodePoints, isReservedHandle, sanitizeText } from "../lib/text";
 
 type ActionResult = {
@@ -88,21 +91,34 @@ const fail = (error: string, status: number, form?: ActionResult["form"]) =>
 
 const ok = () => data<ActionResult>({ ok: true });
 
+/**
+ * レートリミットを1つ消費し、超過していれば 429 応答を返す。通過時は null。
+ * 呼び出し側は `const limited = enforceLimit(...); if (limited) return limited;` と書く。
+ */
+function enforceLimit(name: RateLimitName, subject: string, form?: ActionResult["form"]) {
+  const verdict = consumeToken(name, subject);
+  if (verdict.allowed) return null;
+  return data<ActionResult>({ error: RATE_LIMIT_MESSAGE, ...(form ? { form } : {}) }, rateLimitResponseInit(verdict));
+}
+
 export async function action({ request, context }: Route.ActionArgs) {
+  // 【必須】ログイン・登録もこの action にぶら下がっているので、クロスサイト送信は
+  // 何よりも先に落とす。攻撃者の資格情報で被害者のブラウザにログインさせる
+  // 「ログイン CSRF」は Cookie が無くても成立し、SameSite では防げない
+  // （`request-guard.server.ts`）。
+  const rejected = crossSiteRejection(request);
+  if (rejected) return rejected;
+
   const { env, ctx } = context.get(cloudflareContext);
-  let formData: FormData;
-  try {
-    formData = await request.formData();
-  } catch (error) {
-    console.error("action formData failed", error);
-    return fail("問題が発生しました。時間をおいてもう一度お試しください。", 500);
-  }
+  const body = await readFormDataBounded(request);
+  if (!body.ok) return fail(body.message, body.status);
+  const formData = body.formData;
   const intent = formText(formData, "intent");
   const authForm = intent === "signup" ? "signup" : intent === "login" ? "login" : undefined;
 
   try {
-    if (intent === "signup") return await handleSignup(env, ctx, formData);
-    if (intent === "login") return await handleLogin(env, ctx, formData);
+    if (intent === "signup") return await handleSignup(env, ctx, formData, request);
+    if (intent === "login") return await handleLogin(env, ctx, formData, request);
     if (intent === "logout") return await handleLogout(env, request);
 
     const user = await getSessionUser(request, env);
@@ -119,7 +135,11 @@ export async function action({ request, context }: Route.ActionArgs) {
   return fail("不明な操作です。", 400);
 }
 
-async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
+async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
+  // 登録は IP 単位で絞る。バケツは isolate ローカルなので、分散した攻撃までは
+  // 止まらない（`rate-limit.server.ts` の冒頭コメントを参照）。
+  const limited = enforceLimit("signup", clientKey(request), "signup");
+  if (limited) return limited;
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const displayName = sanitizeText(formText(formData, "displayName"));
   const password = String(formData.get("password") ?? "");
@@ -156,7 +176,12 @@ async function handleSignup(env: AppEnv, ctx: ExecutionContext, formData: FormDa
   return redirect("/", { headers: { "Set-Cookie": await createSession(env, userId, ctx) } });
 }
 
-async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData) {
+async function handleLogin(env: AppEnv, ctx: ExecutionContext, formData: FormData, request: Request) {
+  // 総当たり対策。PBKDF2 の検証は CPU を使うので、消費する前に判定する。
+  // 主体は IP のみ。対象アカウント単位の枠を設けない理由は `rate-limit.server.ts` を参照
+  // （試行時点で消費する口座単位の枠は、他人が正規の持ち主を締め出す道具になる）。
+  const limited = enforceLimit("login", clientKey(request), "login");
+  if (limited) return limited;
   const handle = formText(formData, "handle").toLowerCase().replace(/^@/, "");
   const password = String(formData.get("password") ?? "");
   if (password.length < 8 || password.length > 128) {
@@ -175,6 +200,8 @@ async function handleLogout(env: AppEnv, request: Request) {
 }
 
 async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUser) {
+  const limited = enforceLimit("post", user.id);
+  if (limited) return limited;
   const clean = sanitizeText(formText(formData, "body"), { multiline: true });
   if (!clean || countCodePoints(clean, POST_MAX_LENGTH) > POST_MAX_LENGTH) {
     return fail(`投稿は1〜${POST_MAX_LENGTH}文字で入力してください。`, 400);
@@ -186,6 +213,8 @@ async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUs
 }
 
 async function handleToggleReaction(env: AppEnv, formData: FormData, user: SessionUser) {
+  const limited = enforceLimit("reaction", user.id);
+  if (limited) return limited;
   const postId = formText(formData, "postId");
   const kind = formText(formData, "kind");
   if (!postId || !["like", "repost", "bookmark"].includes(kind)) {
@@ -209,6 +238,9 @@ async function handleToggleReaction(env: AppEnv, formData: FormData, user: Sessi
 }
 
 async function handleDeletePost(env: AppEnv, formData: FormData, user: SessionUser) {
+  // 削除は連打されても実害が薄いので、リアクションと同じ緩い枠を共有する。
+  const limited = enforceLimit("reaction", user.id);
+  if (limited) return limited;
   const postId = formText(formData, "postId");
   await env.DB.prepare(
     "UPDATE posts SET deleted_at = datetime('now') WHERE id = ? AND author_id = ? AND deleted_at IS NULL",

@@ -48,19 +48,51 @@ export function routeArgs<Params = Record<string, never>>(
   };
 }
 
-/** POST request carrying an urlencoded form, like a submitted `<Form>`. */
-export function formRequest(url: string, fields: Record<string, string>, options: { cookie?: string } = {}): Request {
-  const body = new URLSearchParams(fields);
-  const headers = new Headers();
+/**
+ * POST request carrying an urlencoded form, like a submitted `<Form>`.
+ *
+ * `ip` sets `CF-Connecting-IP`（本番で Cloudflare が付けるヘッダ）。レートリミットの
+ * 主体キーはこれだけを見るので、送信元ごとの挙動を確かめるテストで指定する。
+ *
+ * `Content-Length` は既定で**明示的に付ける**。ブラウザは `<form>` 送信なら必ず付けるが、
+ * `Request` のコンストラクタは付けない（fetch 仕様上の禁止ヘッダ）ため、付けないと
+ * HTTP/1.1 の通常送信を再現できない。`contentLength: null` を渡すと省略でき、
+ * HTTP/2 やストリーミング送信のように長さを申告しない経路を再現できる。
+ *
+ * `origin` / `secFetchSite` はクロスサイト送信の門番を確かめるためのもので、
+ * 省略すると「判定材料が無い送信」＝素通しになる。
+ */
+export function formRequest(
+  url: string,
+  fields: Record<string, string>,
+  options: {
+    cookie?: string;
+    ip?: string;
+    origin?: string;
+    secFetchSite?: string;
+    /** 実際の本文とは別の長さを申告させる。`null` で申告しない送信になる。 */
+    contentLength?: number | null;
+  } = {},
+): Request {
+  const body = new URLSearchParams(fields).toString();
+  const headers = new Headers({ "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8" });
+  if (options.contentLength !== null) {
+    headers.set("Content-Length", String(options.contentLength ?? new TextEncoder().encode(body).byteLength));
+  }
   if (options.cookie) headers.set("Cookie", options.cookie);
+  if (options.ip) headers.set("CF-Connecting-IP", options.ip);
+  if (options.origin) headers.set("Origin", options.origin);
+  if (options.secFetchSite) headers.set("Sec-Fetch-Site", options.secFetchSite);
   return new Request(url, { method: "POST", body, headers });
 }
 
 /** POST request whose body cannot be parsed as form data. */
 export function malformedFormRequest(url: string, options: { cookie?: string } = {}): Request {
+  const body = "{}";
   const headers = new Headers({ "Content-Type": "application/json" });
+  headers.set("Content-Length", String(body.length));
   if (options.cookie) headers.set("Cookie", options.cookie);
-  return new Request(url, { method: "POST", body: "{}", headers });
+  return new Request(url, { method: "POST", body, headers });
 }
 
 export function getRequest(url: string, options: { cookie?: string } = {}): Request {

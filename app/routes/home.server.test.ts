@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSessionUser, SESSION_COOKIE, verifyPassword } from "../lib/auth.server";
+import { consumeToken, RATE_LIMITS, resetRateLimits } from "../lib/rate-limit.server";
 import { brokenEnv, createPost, createTestApp, createUser, failingEnv, resetData, type TestApp } from "../testing/d1";
 import {
   expectData,
@@ -26,12 +27,20 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(app.env);
+  // レートリミットは isolate メモリに残るのでテスト間で持ち越さない。
+  resetRateLimits();
 });
 
 const URL_HOME = "http://test.local/?index";
 
 function callAction(request: Request, env = app.env) {
   return action(routeArgs(request, env, { pattern: "/" }));
+}
+
+/** `data()` の init から `Retry-After` を取り出す。 */
+function retryAfterOf(result: unknown): string | null {
+  const init = (result as { init?: ResponseInit | null }).init ?? null;
+  return new Headers(init?.headers).get("Retry-After");
 }
 
 function callLoader(request: Request, env = app.env) {
@@ -405,6 +414,79 @@ describe("action envelope", () => {
     expect(data.error).toBe("不明な操作です。");
   });
 
+  it("別サイトからの送信は 403 で落とす（ログイン CSRF の遮断）", async () => {
+    const user = await createUser(app.env, { handle: "csrf_target", password: "correct horse battery" });
+    expect(user.id).toBeTruthy();
+
+    // 攻撃者のサイトから、攻撃者の資格情報で被害者をログインさせようとする送信。
+    const result = await callAction(
+      formRequest(
+        URL_HOME,
+        { intent: "login", handle: "csrf_target", password: "correct horse battery" },
+        { origin: "https://evil.example" },
+      ),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    expect((result as Response).status).toBe(403);
+    // セッションは張られない。
+    expect((result as Response).headers.get("Set-Cookie")).toBeNull();
+  });
+
+  it("Sec-Fetch-Site: cross-site も 403 で落とす", async () => {
+    const result = await callAction(formRequest(URL_HOME, { intent: "logout" }, { secFetchSite: "cross-site" }));
+
+    expect((result as Response).status).toBe(403);
+  });
+
+  it("同一 origin の送信と、ヘッダを持たない送信は通す", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+
+    // 同一 origin（ブラウザからの通常の送信）。
+    const sameOrigin = await callAction(
+      formRequest(URL_HOME, { intent: "createPost", body: "同一 origin" }, { cookie, origin: "http://test.local" }),
+    );
+    expect(expectData<ActionResult>(sameOrigin).data.ok).toBe(true);
+
+    // 判定材料が無い送信（テスト・curl・古いクライアント）はこれまでどおり通す。
+    const noHeaders = await callAction(formRequest(URL_HOME, { intent: "createPost", body: "ヘッダ無し" }, { cookie }));
+    expect(expectData<ActionResult>(noHeaders).data.ok).toBe(true);
+  });
+
+  it("本文が大きすぎる送信は読まずに 413", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    // 100MB を申告する（Cloudflare Free のリクエストボディ上限）。
+    const request = formRequest(
+      URL_HOME,
+      { intent: "createPost", body: "巨大" },
+      { cookie, contentLength: 100 * 1_024 * 1_024 },
+    );
+
+    const { data, status } = expectData<ActionResult>(await callAction(request));
+
+    expect(status).toBe(413);
+    expect(data.error).toBe("送信内容が大きすぎます。");
+    // formData() を呼ぶと本文が isolate のヒープへ載る。門番はその前に効いていなければ意味がない。
+    expect(request.bodyUsed).toBe(false);
+    const posts = await app.env.DB.prepare("SELECT COUNT(*) AS n FROM posts").first<{ n: number }>();
+    expect(posts?.n).toBe(0);
+  });
+
+  it("長さを申告しない送信も、上限内なら通す（HTTP/2・ストリーミング送信）", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+
+    const result = await callAction(
+      formRequest(URL_HOME, { intent: "createPost", body: "長さの申告なし" }, { cookie, contentLength: null }),
+    );
+
+    expect(expectData<ActionResult>(result).data.ok).toBe(true);
+    const posts = await app.env.DB.prepare("SELECT body FROM posts").first<{ body: string }>();
+    expect(posts?.body).toBe("長さの申告なし");
+  });
+
   it("returns a friendly 500 when the body is not form data", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -431,5 +513,69 @@ describe("action envelope", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("rate limits", () => {
+  const signupFields = { intent: "signup", displayName: "新人", password: "password123" };
+
+  it("stops a burst of signups from one client with 429 and Retry-After", async () => {
+    for (let index = 0; index < RATE_LIMITS.signup.capacity; index += 1) {
+      const allowed = await callAction(formRequest(URL_HOME, { ...signupFields, handle: `newcomer${index}` }));
+      expect(expectRedirect(allowed).location).toBe("/");
+    }
+
+    const blocked = await callAction(formRequest(URL_HOME, { ...signupFields, handle: "newcomer_last" }));
+    const { data, status } = expectData<ActionResult>(blocked);
+    expect(status).toBe(429);
+    expect(data.form).toBe("signup");
+    expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+    expect(Number(retryAfterOf(blocked))).toBeGreaterThan(0);
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS total FROM users").first<{ total: number }>();
+    expect(row?.total).toBe(RATE_LIMITS.signup.capacity);
+  });
+
+  it("stops brute-forced logins before the password is verified", async () => {
+    await createUser(app.env, { handle: "member", password: "secret pass 9" });
+    for (let index = 0; index < RATE_LIMITS.login.capacity; index += 1) consumeToken("login", "unknown");
+
+    const result = await callAction(
+      formRequest(URL_HOME, { intent: "login", handle: "member", password: "secret pass 9" }),
+    );
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(429);
+    expect(data.form).toBe("login");
+    expect(retryAfterOf(result)).not.toBeNull();
+  });
+
+  it("stops a flood of posts from one account", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    for (let index = 0; index < RATE_LIMITS.post.capacity; index += 1) consumeToken("post", user.id);
+
+    const result = await callAction(formRequest(URL_HOME, { intent: "createPost", body: "連投" }, { cookie }));
+    expect(expectData<ActionResult>(result).status).toBe(429);
+    const row = await app.env.DB.prepare("SELECT COUNT(*) AS total FROM posts").first<{ total: number }>();
+    expect(row?.total).toBe(0);
+  });
+
+  it("shares one bucket between reactions and deletions", async () => {
+    const user = await createUser(app.env);
+    const post = await createPost(app.env, { authorId: user.id });
+    const cookie = await loginCookie(app.env, user.id);
+    for (let index = 0; index < RATE_LIMITS.reaction.capacity; index += 1) consumeToken("reaction", user.id);
+
+    const reaction = await callAction(
+      formRequest(URL_HOME, { intent: "toggleReaction", postId: post.id, kind: "like" }, { cookie }),
+    );
+    expect(expectData<ActionResult>(reaction).status).toBe(429);
+
+    const deletion = await callAction(formRequest(URL_HOME, { intent: "deletePost", postId: post.id }, { cookie }));
+    expect(expectData<ActionResult>(deletion).status).toBe(429);
+
+    const row = await app.env.DB.prepare("SELECT deleted_at FROM posts WHERE id = ?")
+      .bind(post.id)
+      .first<{ deleted_at: string | null }>();
+    expect(row?.deleted_at).toBeNull();
   });
 });

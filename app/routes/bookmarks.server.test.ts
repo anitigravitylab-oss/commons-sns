@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { consumeToken, RATE_LIMITS, resetRateLimits } from "../lib/rate-limit.server";
 import { addReaction, createPost, createTestApp, createUser, failingEnv, resetData, type TestApp } from "../testing/d1";
 import { expectData, expectRedirect, formRequest, getRequest, loginCookie, routeArgs } from "../testing/requests";
 import { action, loader } from "./bookmarks";
@@ -18,6 +19,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await resetData(app.env);
+  // レートリミットは isolate メモリに残るのでテスト間で持ち越さない。
+  resetRateLimits();
 });
 
 const URL_BOOKMARKS = "http://test.local/bookmarks";
@@ -104,6 +107,22 @@ describe("bookmarks action", () => {
     }
   });
 
+  it("別サイトからの送信は 403、本文が大きすぎる送信は 413", async () => {
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    const send = (options: { origin?: string; contentLength?: number }) =>
+      action(
+        routeArgs(
+          formRequest(URL_BOOKMARKS, { intent: "removeBookmark", postId: "x" }, { cookie, ...options }),
+          app.env,
+          { pattern: "/bookmarks" },
+        ),
+      );
+
+    expect(((await send({ origin: "https://evil.example" })) as Response).status).toBe(403);
+    expect(expectData<ActionResult>(await send({ contentLength: 1_048_576 })).status).toBe(413);
+  });
+
   it("maps a failing delete to a 500 with a friendly message", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -121,5 +140,29 @@ describe("bookmarks action", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+describe("bookmarks rate limits", () => {
+  it("stops a burst of bookmark removals with 429 and keeps the reaction", async () => {
+    const author = await createUser(app.env);
+    const user = await createUser(app.env);
+    await createPost(app.env, { id: "kept", authorId: author.id });
+    await addReaction(app.env, { userId: user.id, postId: "kept", kind: "bookmark" });
+    const cookie = await loginCookie(app.env, user.id);
+    // ブックマーク解除はリアクションと同じ枠を使う。
+    for (let index = 0; index < RATE_LIMITS.reaction.capacity; index += 1) consumeToken("reaction", user.id);
+
+    const result = await action(
+      routeArgs(formRequest(URL_BOOKMARKS, { intent: "removeBookmark", postId: "kept" }, { cookie }), app.env, {
+        pattern: "/bookmarks",
+      }),
+    );
+    const { data, status } = expectData<ActionResult>(result);
+    expect(status).toBe(429);
+    expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+
+    const rows = await app.env.DB.prepare("SELECT kind FROM post_reactions WHERE user_id = ?").bind(user.id).all();
+    expect(rows.results).toEqual([{ kind: "bookmark" }]);
   });
 });
