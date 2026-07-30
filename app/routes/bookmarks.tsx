@@ -34,16 +34,19 @@ export async function loader({ request, context }: Route.LoaderArgs) {
 
 export async function action({ request, context }: Route.ActionArgs) {
   // クロスサイト送信と過大な本文は、セッションを引く前に落とす（`request-guard.server.ts`）。
+  // 順序が要点で、セッションを先に引くと、過大な本文を投げるだけで 413 の前に
+  // D1 への往復を1回ぶん踏ませられる。
   const rejected = crossSiteRejection(request);
   if (rejected) return rejected;
 
   const { env } = context.get(cloudflareContext);
-  const user = await getSessionUser(request, env);
-  if (!user) return redirect("/?auth=login");
-
   const body = await readFormDataBounded(request);
   if (!body.ok) return data<ActionResult>({ error: body.message }, { status: body.status });
   const formData = body.formData;
+
+  const user = await getSessionUser(request, env);
+  if (!user) return redirect("/?auth=login");
+
   const intent = String(formData.get("intent") ?? "");
   const postId = String(formData.get("postId") ?? "").trim();
   if (intent !== "removeBookmark" || !postId) {

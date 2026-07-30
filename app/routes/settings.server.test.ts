@@ -121,6 +121,13 @@ describe("settings request guards", () => {
 
     expect(expectData<ActionResult>(result).status).toBe(413);
   });
+
+  it("過大な本文はセッションを引く前に落とす（未ログインでもリダイレクトしない）", async () => {
+    // セッションを先に引くと、この送信だけで 413 の前に D1 への往復を踏ませられる。
+    const result = await callAction(formRequest(URL_SETTINGS, { intent: "logout" }, { contentLength: 1_048_576 }));
+
+    expect(expectData<ActionResult>(result).status).toBe(413);
+  });
 });
 
 describe("changePassword", () => {
@@ -322,6 +329,54 @@ describe("settings rate limits", () => {
     expect(
       await verifyPassword("correct horse battery", account?.password_hash ?? "", account?.password_salt ?? ""),
     ).toBe(true);
+  });
+
+  it("確認欄の入力ミスでは枠を消費しない", async () => {
+    // 検証より前に消費すると、確認用の欄を打ち間違えただけで枠が空になり、
+    // パスワード変更も退会もできなくなる（どちらも同じ枠を共有しているため）。
+    const user = await createUser(app.env, { handle: "typo" });
+    const cookie = await loginCookie(app.env, user.id);
+
+    for (let index = 0; index < RATE_LIMITS.credential.capacity; index += 1) {
+      const mismatch = await callAction(
+        formRequest(
+          URL_SETTINGS,
+          {
+            intent: "changePassword",
+            currentPassword: "correct horse battery",
+            newPassword: "brand new pass 1",
+            newPasswordConfirm: "typed it wrong",
+          },
+          { cookie },
+        ),
+      );
+      expect(expectData<ActionResult>(mismatch).status).toBe(400);
+    }
+
+    // 退会側の確認欄の打ち間違いも、同じ枠を減らさない。
+    const wrongConfirmation = await callAction(
+      formRequest(
+        URL_SETTINGS,
+        { intent: "deleteAccount", password: "correct horse battery", confirmation: "someone_else" },
+        { cookie },
+      ),
+    );
+    expect(expectData<ActionResult>(wrongConfirmation).status).toBe(400);
+
+    // 枠は満タンのままなので、正しい入力はそのまま通る。
+    const changed = await callAction(
+      formRequest(
+        URL_SETTINGS,
+        {
+          intent: "changePassword",
+          currentPassword: "correct horse battery",
+          newPassword: "brand new pass 1",
+          newPasswordConfirm: "brand new pass 1",
+        },
+        { cookie },
+      ),
+    );
+    expect(expectData<ActionResult>(changed)).toMatchObject({ status: 200, data: { ok: true } });
   });
 
   it("leaves logout unthrottled", async () => {

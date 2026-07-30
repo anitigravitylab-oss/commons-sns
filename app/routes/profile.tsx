@@ -95,19 +95,22 @@ export async function loader({ request, context, params }: Route.LoaderArgs) {
  */
 export async function action({ request, context, params }: Route.ActionArgs) {
   // クロスサイト送信と過大な本文は、セッションを引く前に落とす（`request-guard.server.ts`）。
+  // 順序が要点で、セッションやプロフィールを先に引くと、過大な本文を投げるだけで
+  // 413 の前に D1 への往復を2回ぶん踏ませられる。
   const rejected = crossSiteRejection(request);
   if (rejected) return rejected;
 
   const { env } = context.get(cloudflareContext);
+  const body = await readFormDataBounded(request);
+  if (!body.ok) return data<ActionResult>({ error: body.message }, { status: body.status });
+  const formData = body.formData;
+
   const user = await getSessionUser(request, env);
   if (!user) return redirect("/?auth=login");
 
   const profile = await getUserProfileByHandle(env, handleFromParams(params));
   if (!profile) throw data(null, { status: 404 });
 
-  const body = await readFormDataBounded(request);
-  if (!body.ok) return data<ActionResult>({ error: body.message }, { status: body.status });
-  const formData = body.formData;
   const intent = String(formData.get("intent") ?? "");
 
   if (intent === "toggleFollow") {

@@ -70,15 +70,55 @@ const buckets = new Map<string, Bucket>();
 const DISABLED = import.meta.env.MODE === "development";
 
 /**
+ * IPv6 アドレスを /64 プレフィックスへ丸める。
+ *
+ * IPv6 は1契約に /64（以上）がまるごと配られるのが普通で、アドレスそのものを
+ * 主体にすると、同じ相手が1リクエストごとに別のアドレスを名乗って上限を
+ * 無効化できる（バケツの上限まで埋めて他人の記録を押し出すこともできる）。
+ * 先頭4グループ（64 ビット）だけを見れば、その契約全体で1つの枠になる。
+ */
+function ipv6Prefix(address: string): string {
+  // `::ffff:192.0.2.1` のような IPv4 射影アドレスは IPv4 として扱う
+  // （丸めると射影アドレス全体が1つの枠に潰れてしまう）。
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(address);
+  if (mapped) return mapped[1];
+
+  const [head, tail] = address.split("::");
+  const headGroups = head ? head.split(":") : [];
+  const groups =
+    tail === undefined
+      ? headGroups
+      : // 省略された 0 のグループを補ってから先頭を取る。
+        [
+          ...headGroups,
+          ...Array.from(
+            { length: Math.max(8 - headGroups.length - (tail ? tail.split(":").length : 0), 0) },
+            () => "0",
+          ),
+          ...(tail ? tail.split(":") : []),
+        ];
+  // 表記ゆれ（大文字・先頭の 0）を潰してから連結する。
+  return `${groups
+    .slice(0, 4)
+    .map((group) => group.toLowerCase().replace(/^0+(?=.)/, ""))
+    .join(":")}::/64`;
+}
+
+/**
  * レート制限の主体キー。Cloudflare が付与するクライアント IP だけを使う。
  *
  * `X-Forwarded-For` にはフォールバックしない。Cloudflare は（`CF-Connecting-IP` と
  * 違い）このヘッダを上書きしないので、クライアントが自由に詐称でき、1リクエストごとに
  * 別の主体を名乗って上限を無効化できてしまう。取れない場合（ローカル実行やテスト）は
  * "unknown" にまとめる ＝ 全員で1つのバケツを共有する安全側の挙動になる。
+ *
+ * IPv6 は {@link ipv6Prefix} で /64 に丸める。IPv4 はアドレスのままで、
+ * NAT の後ろが1つの枠を共有する（これは IPv4 では避けられない）。
  */
 export function clientKey(request: Request): string {
-  return request.headers.get("CF-Connecting-IP")?.trim() || "unknown";
+  const address = request.headers.get("CF-Connecting-IP")?.trim();
+  if (!address) return "unknown";
+  return address.includes(":") ? ipv6Prefix(address) : address;
 }
 
 /** 経過時間ぶんを補充したトークン残量。 */
@@ -137,6 +177,12 @@ export function consumeToken(name: RateLimitName, subject: string, now: number =
   // 巻き戻し幅ぶんだけ上限を素通しできてしまう（`refill` は経過が負なら補充しない
   // ので、後退させないかぎり巻き戻し中も残量は据え置きになる）。
   const updatedAt = existing ? Math.max(now, existing.updatedAt) : now;
+
+  // Map の反復順は「最初に入れた順」で、既存キーへの再代入では末尾へ動かない。
+  // 追い出し（`evictIfFull`）は反復順の先頭から捨てるので、入れ直さないと
+  // 「いま連打を弾いている最中のバケツ」が、放置された新しいバケツより先に
+  // 落ちてしまい、その相手のカウンタだけが満タンに戻る。
+  if (existing) buckets.delete(key);
 
   if (tokens < 1) {
     buckets.set(key, { tokens, updatedAt, rule });

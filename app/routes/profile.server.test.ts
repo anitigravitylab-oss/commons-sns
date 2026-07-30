@@ -35,6 +35,12 @@ function callLoader(url: string, handle: string, cookie?: string, env = app.env)
   return loader(routeArgs(getRequest(url, { cookie }), env, { pattern: "/users/:handle", params: { handle } }));
 }
 
+/** `data()` の init から `Retry-After` を取り出す。 */
+function retryAfterOf(result: unknown): string | null {
+  const init = (result as { init?: ResponseInit | null }).init ?? null;
+  return new Headers(init?.headers).get("Retry-After");
+}
+
 function callAction(handle: string, fields: Record<string, string>, cookie?: string, env = app.env) {
   return action(
     routeArgs(formRequest(`http://test.local/users/${handle}`, fields, { cookie }), env, {
@@ -195,6 +201,20 @@ describe("profile action", () => {
         formRequest("http://test.local/users/target", { intent: "toggleFollow" }, { cookie, contentLength: 1_048_576 }),
         app.env,
         { pattern: "/users/:handle", params: { handle: "target" } },
+      ),
+    );
+
+    expect(expectData<ActionResult>(result).status).toBe(413);
+  });
+
+  it("過大な本文はセッション・プロフィールを引く前に落とす（未ログインでも 413）", async () => {
+    // セッションとプロフィールを先に引くと、この送信だけで 413 の前に D1 への
+    // 往復を2回ぶん踏ませられる。存在しないハンドルでも 404 より先に 413 になる。
+    const result = await action(
+      routeArgs(
+        formRequest("http://test.local/users/ghost", { intent: "toggleFollow" }, { contentLength: 1_048_576 }),
+        app.env,
+        { pattern: "/users/:handle", params: { handle: "ghost" } },
       ),
     );
 
@@ -387,6 +407,7 @@ describe("profile rate limits", () => {
     const { data, status } = expectData<ActionResult>(result);
     expect(status).toBe(429);
     expect(data.error).toBe("操作が多すぎます。しばらく待ってからお試しください。");
+    expect(Number(retryAfterOf(result))).toBeGreaterThan(0);
     expect(await isFollowing(app.env, viewer.id, target.id)).toBe(false);
   });
 
@@ -397,6 +418,7 @@ describe("profile rate limits", () => {
 
     const result = await callAction("editor", { intent: "updateProfile", displayName: "別名", bio: "" }, cookie);
     expect(expectData<ActionResult>(result).status).toBe(429);
+    expect(Number(retryAfterOf(result))).toBeGreaterThan(0);
 
     const row = await app.env.DB.prepare("SELECT display_name FROM users WHERE id = ?")
       .bind(user.id)

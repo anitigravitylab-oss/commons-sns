@@ -32,6 +32,24 @@ describe("clientKey", () => {
     expect(clientKey(spoofed)).toBe("unknown");
   });
 
+  it("IPv6 は /64 に丸めて、同じ契約をひとつの枠にまとめる", () => {
+    // IPv6 は1契約に /64（以上）がまるごと配られる。アドレスそのものを主体にすると、
+    // 同じ相手が1リクエストごとに別のアドレスを名乗って上限を無効化できてしまう。
+    const key = (ip: string) => clientKey(new Request("http://test.local/", { headers: { "CF-Connecting-IP": ip } }));
+
+    expect(key("2001:db8:1234:5678:1:2:3:4")).toBe("2001:db8:1234:5678::/64");
+    // 同じ /64 の別アドレスは同じ枠、別の /64 は別の枠。
+    expect(key("2001:db8:1234:5678:aaaa:bbbb:cccc:dddd")).toBe(key("2001:db8:1234:5678:1:2:3:4"));
+    expect(key("2001:db8:1234:5679::1")).not.toBe(key("2001:db8:1234:5678::1"));
+    // 表記ゆれ（大文字・先頭の 0・`::` の省略）で別の枠に割れない。
+    expect(key("2001:0DB8:1234:5678::1")).toBe("2001:db8:1234:5678::/64");
+    expect(key("2001:db8::1")).toBe(key("2001:db8:0:0:0:0:0:9"));
+    // IPv4 射影アドレスは IPv4 として扱う（丸めると射影アドレス全体が1つの枠に潰れる）。
+    expect(key("::ffff:203.0.113.7")).toBe("203.0.113.7");
+    // IPv4 はアドレスのまま。
+    expect(key("203.0.113.7")).toBe("203.0.113.7");
+  });
+
   it("treats blank headers as an unknown client", () => {
     // Headers は値の前後空白を落とすので、空白だけの指定は空文字になる。
     const blank = new Request("http://test.local/", { headers: { "CF-Connecting-IP": "  " } });
@@ -130,6 +148,22 @@ describe("consumeToken", () => {
     // 大量のキーを作るだけで他人のカウンタまで消せる＝上限が無効になる。
     expect(consumeToken("signup", "fresh_ip", T0).allowed).toBe(true);
     expect(consumeToken("signup", `filler_${MAX_BUCKETS - 1}`, T0).allowed).toBe(false);
+  });
+
+  it("いま使われているバケツは、放置された新しいバケツより先に落ちない", () => {
+    const { capacity } = RATE_LIMITS.signup;
+    // どれも消費済み（満タンではない）のバケツを上限まで作る。
+    for (let index = 0; index < MAX_BUCKETS; index += 1) {
+      for (let attempt = 0; attempt < capacity; attempt += 1) consumeToken("signup", `filler_${index}`, T0);
+    }
+    // 最初に作ったバケツ（＝反復順の先頭）を、いま連打している相手として使い直す。
+    expect(consumeToken("signup", "filler_0", T0).allowed).toBe(false);
+
+    // 新しい主体の要求で追い出しが走る。Map の反復順は挿入順で、既存キーへの
+    // 再代入では末尾に動かないため、入れ直さないと「いま弾いている最中の相手」が
+    // 真っ先に落ち、その相手のカウンタだけ満タンに戻ってしまう。
+    expect(consumeToken("signup", "fresh_ip", T0).allowed).toBe(true);
+    expect(consumeToken("signup", "filler_0", T0).allowed).toBe(false);
   });
 
   it("defaults to the wall clock when no time is given", () => {
