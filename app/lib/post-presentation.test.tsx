@@ -189,6 +189,12 @@ describe("PostBody", () => {
     expect(html).toContain("mail@example.com");
   });
 
+  it("URL のクエリの中や、日本語のメールアドレスもリンクにしない", () => {
+    const html = renderInRouter(<PostBody body="https://example.com?q=@demo_aoi と 太郎@example.com" />);
+    expect(html).not.toContain('href="/users/');
+    expect(html).toContain("太郎@example.com");
+  });
+
   it("大文字混じりの表記は本文のまま表示し、リンク先だけ正規化する", () => {
     const html = renderInRouter(<PostBody body="@Demo_Aoi さん" />);
     expect(html).toContain('href="/users/demo_aoi"');

@@ -16,6 +16,25 @@ describe("extractMentions", () => {
     expect(extractMentions("@@demo_aoi")).toEqual([]);
   });
 
+  it("URL のクエリやフラグメントの中も拾わない", () => {
+    // 直前の1文字だけを見ると `=` や `#` が区切りに見えてしまう。
+    expect(extractMentions("https://example.com?q=@demo_aoi")).toEqual([]);
+    expect(extractMentions("https://example.com/page#@demo_aoi")).toEqual([]);
+    expect(extractMentions("https://example.com/x?a=1&b=@demo_aoi です")).toEqual([]);
+    expect(extractMentions("www.example.com/?u=@demo_aoi")).toEqual([]);
+    // URL のあとに続く本文中のメンションは、これまでどおり拾う。
+    expect(extractMentions("https://example.com?q=@demo_aoi と @demo_yuu さん")).toEqual(["demo_yuu"]);
+  });
+
+  it("ローカル部が日本語のメールアドレスも拾わない", () => {
+    // 直前が英数字でないので、後ろに続くドメインで見分ける。
+    expect(extractMentions("太郎@example.com へどうぞ")).toEqual([]);
+    expect(extractMentions("連絡先は 山田@example.co.jp です")).toEqual([]);
+    // 文末の句点やピリオドはドメインではないので、メンションのまま。
+    expect(extractMentions("よろしく @demo_aoi。")).toEqual(["demo_aoi"]);
+    expect(extractMentions("よろしく @demo_aoi. 以上")).toEqual(["demo_aoi"]);
+  });
+
   it("ハンドルの形（3〜20文字の英数字と _）に合わないものは拾わない", () => {
     expect(extractMentions("@ab は短すぎる")).toEqual([]);
     expect(extractMentions(`@${"a".repeat(21)} は長すぎる`)).toEqual([]);
@@ -73,6 +92,18 @@ describe("splitBodySegments", () => {
     const body = "@aaa @bbb @ccc @ddd @eee @fff @aaa";
     const mentions = splitBodySegments(body).filter((segment) => segment.type === "mention");
     expect(mentions).toHaveLength(7);
+  });
+
+  it("URL やメールアドレスの中は本文のまま残す", () => {
+    expect(splitBodySegments("見て https://example.com?q=@demo_aoi")).toEqual([
+      { type: "text", value: "見て https://example.com?q=@demo_aoi" },
+    ]);
+    expect(splitBodySegments("太郎@example.com まで")).toEqual([{ type: "text", value: "太郎@example.com まで" }]);
+    // URL の直後に本物のメンションが続く場合は、そこだけリンクにする。
+    expect(splitBodySegments("https://example.com?q=@demo_aoi と @demo_yuu")).toEqual([
+      { type: "text", value: "https://example.com?q=@demo_aoi と " },
+      { type: "mention", handle: "demo_yuu", text: "demo_yuu" },
+    ]);
   });
 
   it("メンションが無ければ本文全体が1つのテキスト断片になる", () => {
