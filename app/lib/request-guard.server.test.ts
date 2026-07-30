@@ -196,6 +196,33 @@ describe("readFormDataBounded", () => {
     expect(await readFormDataBounded(request, FORM_BODY_MAX_BYTES * 2)).toMatchObject({ ok: true });
   });
 
+  it("読み取りの途中で壊れた本文は 500（BYOB と既定の両方の経路）", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const brokenRequest = (options: { bytes: boolean }) =>
+        new Request(URL_ACTION, {
+          method: "POST",
+          body: new ReadableStream({
+            ...(options.bytes ? { type: "bytes" as const } : {}),
+            pull(controller) {
+              controller.error(new Error("stream broke"));
+            },
+          }),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          // @ts-expect-error ストリーム本文には duplex 指定が要る（型定義にはまだ無い）
+          duplex: "half",
+        });
+
+      // バイトストリーム = BYOB で読む経路。
+      expect(await readFormDataBounded(brokenRequest({ bytes: true }))).toMatchObject({ ok: false, status: 500 });
+      // バイトストリームでない = 既定の読み取りに落ちる経路。
+      expect(await readFormDataBounded(brokenRequest({ bytes: false }))).toMatchObject({ ok: false, status: 500 });
+      expect(consoleError).toHaveBeenCalledTimes(2);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("フォームとして読めない本文は 500", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
