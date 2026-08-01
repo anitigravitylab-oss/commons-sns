@@ -18,11 +18,13 @@ export const MENTION_MAX = 5;
  * ハンドルの形は登録時の検証と同じ `[a-z0-9_]{3,20}`。次の2つは拾わない。
  *
  * - 直前が英数字・`_`・`@`・`/`（`mail@example.com`、`https://example.com/@user`）
- * - 直後が `.` ＋ 英字（`太郎@example.com` の `@example`）。ローカル部が日本語の
+ * - 直後が `.` ＋ 文字（`太郎@example.com` の `@example`）。ローカル部が日本語の
  *   アドレスは直前の文字では見分けられないので、後ろのドメインで判定する。
- *   `@demo_aoi。` や `@demo_aoi. ` のような文末は、`.` の次が英字ではないので通る。
+ *   ここを `[a-z]` にすると `太郎@example.みんな` のような国際化ドメインを
+ *   取りこぼすため、字種を問わず `\p{L}` で見る。`@demo_aoi。` や
+ *   `@demo_aoi. ` のような文末は、`.` の次が文字ではないので通る。
  */
-const MENTION_PATTERN = /(^|[^0-9A-Za-z_@/])@([a-z0-9_]{3,20})(?![0-9a-z_]|\.[a-z])/gi;
+const MENTION_PATTERN = /(^|[^0-9A-Za-z_@/])@([a-z0-9_]{3,20})(?![0-9a-z_]|\.\p{L})/giu;
 
 /**
  * URL とみなすかたまり。この範囲に入る `@` はメンションにしない。
@@ -30,8 +32,12 @@ const MENTION_PATTERN = /(^|[^0-9A-Za-z_@/])@([a-z0-9_]{3,20})(?![0-9a-z_]|\.[a-
  * 直前の1文字だけを見る方式では、`https://example.com?q=@demo_aoi` の `=` や
  * `#`・`&` が「区切り」に見えてしまい、URL の一部がリンクになる。空白で
  * 区切られたかたまりごと外す。
+ *
+ * ただし日本語の文では `https://example.com、@demo_aoi さん` のように、URL の
+ * 直後に空白を置かず読点や括弧を続ける。`\S+` で切ると後ろのメンションまで
+ * URL に飲まれて消えるため、URL に現れない全角の約物と全角空白で打ち切る。
  */
-const URL_SPAN_PATTERN = /(?:https?:\/\/|www\.)\S+/gi;
+const URL_SPAN_PATTERN = /(?:https?:\/\/|www\.)[^\s、。，．！？；：…‥・「」『』（）〔〕【】〈〉《》〝〟｛｝［］　]+/giu;
 
 /** 本文中で URL が占める範囲（`[開始, 終了)` の並び）。 */
 function urlSpans(body: string): [number, number][] {

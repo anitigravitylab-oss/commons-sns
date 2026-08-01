@@ -35,6 +35,22 @@ describe("extractMentions", () => {
     expect(extractMentions("よろしく @demo_aoi. 以上")).toEqual(["demo_aoi"]);
   });
 
+  it("トップレベルドメインが日本語のメールアドレスも拾わない", () => {
+    // ドメインの判定を ASCII の英字に限ると、国際化ドメインを取りこぼす。
+    expect(extractMentions("太郎@example.みんな へどうぞ")).toEqual([]);
+    expect(extractMentions("連絡先は yamada@example.日本 です")).toEqual([]);
+  });
+
+  it("URL の直後に約物が続いても、そのあとのメンションを拾う", () => {
+    // 日本語の文では URL のあとに空白を置かず読点や閉じ括弧を続ける。空白だけを
+    // 区切りにすると、後ろのメンションまで URL の一部として飲み込んでしまう。
+    expect(extractMentions("https://example.com、@demo_aoi さん")).toEqual(["demo_aoi"]);
+    expect(extractMentions("https://example.com。@demo_aoi")).toEqual(["demo_aoi"]);
+    expect(extractMentions("（https://example.com）@demo_aoi")).toEqual(["demo_aoi"]);
+    // 約物で打ち切っても、クエリやフラグメントの中は従来どおり拾わない。
+    expect(extractMentions("https://example.com/x?a=1&b=@demo_aoi です")).toEqual([]);
+  });
+
   it("ハンドルの形（3〜20文字の英数字と _）に合わないものは拾わない", () => {
     expect(extractMentions("@ab は短すぎる")).toEqual([]);
     expect(extractMentions(`@${"a".repeat(21)} は長すぎる`)).toEqual([]);
@@ -103,6 +119,17 @@ describe("splitBodySegments", () => {
     expect(splitBodySegments("https://example.com?q=@demo_aoi と @demo_yuu")).toEqual([
       { type: "text", value: "https://example.com?q=@demo_aoi と " },
       { type: "mention", handle: "demo_yuu", text: "demo_yuu" },
+    ]);
+  });
+
+  it("URL の直後の約物で区切り、そのあとのメンションだけリンクにする", () => {
+    expect(splitBodySegments("https://example.com、@demo_aoi さん")).toEqual([
+      { type: "text", value: "https://example.com、" },
+      { type: "mention", handle: "demo_aoi", text: "demo_aoi" },
+      { type: "text", value: " さん" },
+    ]);
+    expect(splitBodySegments("太郎@example.みんな まで")).toEqual([
+      { type: "text", value: "太郎@example.みんな まで" },
     ]);
   });
 
