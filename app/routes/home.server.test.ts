@@ -598,6 +598,28 @@ describe("rate limits", () => {
     expect(row?.total).toBe(0);
   });
 
+  it("空送信や文字数超過では投稿の枠を消費しない", async () => {
+    // 検証より前に消費すると、書き込みまで行かない送信を10回繰り返すだけで
+    // 1分ぶんの投稿枠が消え、自分の操作ミスで自分が締め出される。
+    const user = await createUser(app.env);
+    const cookie = await loginCookie(app.env, user.id);
+    const rejected = ["", " \u200b\n ", "あ".repeat(281)];
+    for (let index = 0; index < RATE_LIMITS.post.capacity + 5; index += 1) {
+      const result = await callAction(
+        formRequest(URL_HOME, { intent: "createPost", body: rejected[index % rejected.length] }, { cookie }),
+      );
+      expect(expectData<ActionResult>(result).status).toBe(400);
+    }
+
+    // 枠は満タンのままなので、正しい投稿が capacity 回ぶん通る。
+    for (let index = 0; index < RATE_LIMITS.post.capacity; index += 1) {
+      const allowed = await callAction(
+        formRequest(URL_HOME, { intent: "createPost", body: `投稿${index}` }, { cookie }),
+      );
+      expect(expectData<ActionResult>(allowed).data.ok).toBe(true);
+    }
+  });
+
   it("shares one bucket between reactions and deletions", async () => {
     const user = await createUser(app.env);
     const post = await createPost(app.env, { authorId: user.id });

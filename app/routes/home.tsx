@@ -206,12 +206,16 @@ async function handleLogout(env: AppEnv, request: Request) {
 }
 
 async function handleCreatePost(env: AppEnv, formData: FormData, user: SessionUser) {
-  const limited = enforceLimit("post", user.id);
-  if (limited) return limited;
   const clean = sanitizeText(formText(formData, "body"), { multiline: true });
   if (!clean || countCodePoints(clean, POST_MAX_LENGTH) > POST_MAX_LENGTH) {
     return fail(`投稿は1〜${POST_MAX_LENGTH}文字で入力してください。`, 400);
   }
+  // 消費するのは形式として通った投稿だけにする（登録・ログインと同じ理屈）。
+  // 検証より前に消費すると、空送信や文字数超過を10回繰り返しただけで枠が空になり、
+  // 自分の操作ミスで自分が1分待たされる。守りたいのは D1 への書き込みなので、
+  // その手前でありさえすれば連投を止める効き方は変わらない。
+  const limited = enforceLimit("post", user.id);
+  if (limited) return limited;
   await env.DB.prepare("INSERT INTO posts (id, author_id, body, visibility) VALUES (?, ?, ?, 'public')")
     .bind(crypto.randomUUID(), user.id, clean)
     .run();
